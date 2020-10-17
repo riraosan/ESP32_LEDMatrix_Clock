@@ -31,11 +31,8 @@ SOFTWARE.
 #include <ArduinoJson.h>
 #include <StreamUtils.h>
 #include <Ticker.h>
-
 #include <ESP32_SPIFFS_ShinonomeFNT.h>
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
-//#include <time.h>
-#include <stdio.h>
 #define HOSTNAME "esp32"
 #define MONITOR_SPEED 115200
 #define AP_NAME "ESP32-G-AP"
@@ -70,8 +67,6 @@ Ticker clocker;
 AsyncWebServer server(80);
 DNSServer dns;
 AsyncWiFiManager wifiManager(&server, &dns);
-
-const float period = 0.5; //seconds
 
 //LEDマトリクスの書き込みアドレスを設定するメソッド
 void setRAMAdder(uint8_t lineNumber)
