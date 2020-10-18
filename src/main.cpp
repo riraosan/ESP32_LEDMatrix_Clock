@@ -33,11 +33,11 @@ SOFTWARE.
 #include <Ticker.h>
 #include <ESP32_SPIFFS_ShinonomeFNT.h>
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
+
 #define HOSTNAME "esp32"
 #define MONITOR_SPEED 115200
 #define AP_NAME "ESP32-G-AP"
-#define MSG_CONNECTED "        WiFi Connected."
-
+#define MSG_CONNECTED "        WiFi Started."
 #define JST 3600 * 9
 
 //ポート設定
@@ -63,12 +63,13 @@ const char *Shino_Zen_Font_file = "/shnmk16.bdf";   //全角フォントファ�
 const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名を定義
 
 ESP32_SPIFFS_ShinonomeFNT SFR;
-Ticker clocker;
-AsyncWebServer server(80);
 DNSServer dns;
+AsyncWebServer server(80);
 AsyncWiFiManager wifiManager(&server, &dns);
+Ticker clocker;
+Ticker blinker;
 
-//LEDマトリクスの書き込みアドレスを設定するメソッド
+//LEDマトリクスの書き込みアドレスを設定
 void setRAMAdder(uint8_t lineNumber)
 {
   uint8_t A[4] = {0};
@@ -97,7 +98,6 @@ void setRAMAdder(uint8_t lineNumber)
 ////////////////////////////////////////////////////////////////////////////////////
 void send_line_data(uint8_t iram_adder, uint8_t ifont_data[], uint8_t color_data[])
 {
-
   uint8_t font[8] = {0};
   uint8_t tmp_data = 0;
   int k = 0;
@@ -263,7 +263,7 @@ void scrollLEDMatrix(int16_t sj_length, uint8_t font_data[][16], uint8_t color_d
 //
 //sj_length:半角文字数
 //font_data:フォントデータ（東雲フォント）
-//color_data:フォントカラーデータ（半角毎に設定する）//
+//color_data:フォントカラーデータ（半角毎に設定する）
 ////////////////////////////////////////////////////////////////////
 void printLEDMatrix(int16_t sj_length, uint8_t font_data[][16], uint8_t color_data[])
 {
@@ -275,7 +275,6 @@ void printLEDMatrix(int16_t sj_length, uint8_t font_data[][16], uint8_t color_da
   int n = 0;
   for (int i = 0; i < sj_length; i++)
   {
-
     //8ビット毎の色情報を1ビット毎に変換する
     for (int j = 0; j < 8; j++)
     {
@@ -291,7 +290,6 @@ void printLEDMatrix(int16_t sj_length, uint8_t font_data[][16], uint8_t color_da
 
   for (int k = 0; k < sj_length * 8 + 2; k++)
   {
-    ram = ~ram;
     digitalWrite(PORT_AB_IN, ram); //RAM-A/RAM-Bに書き込み
     for (int i = 0; i < 16; i++)
     {
@@ -303,6 +301,7 @@ void printLEDMatrix(int16_t sj_length, uint8_t font_data[][16], uint8_t color_da
 
       send_line_data(i, src_line_data, tmp_color_data);
     }
+    ram = ~ram;
   }
 }
 
@@ -323,7 +322,7 @@ void setAllPortOutput()
 
 void setAllPortLow()
 {
-  digitalWrite(PORT_SE_IN, LOW);
+  //digitalWrite(PORT_SE_IN, LOW);
   digitalWrite(PORT_AB_IN, LOW);
   digitalWrite(PORT_A3_IN, LOW);
   digitalWrite(PORT_A2_IN, LOW);
@@ -394,6 +393,30 @@ void blink()
   printTimeLEDMatrix();
 }
 
+void connecting()
+{
+  uint16_t sj_length = 0;
+  //フォントデータバッファ
+  uint8_t _font_buf[8][16] = {0};
+  //フォント色データ（半角文字毎に設定する）
+  uint8_t _font_color[8] = {G, G, G, G, G, G, G, G};
+
+  static int num = 0;
+
+  if (num == 0)
+  {
+    sj_length = SFR.StrDirect_ShinoFNT_readALL("        ", _font_buf);
+    printLEDMatrix(sj_length, _font_buf, _font_color);
+    num = 1;
+  }
+  else
+  {
+    sj_length = SFR.StrDirect_ShinoFNT_readALL("       .", _font_buf);
+    printLEDMatrix(sj_length, _font_buf, _font_color);
+    num = 0;
+  }
+}
+
 void initWiFi()
 {
   wifiManager.setDebugOutput(true);
@@ -403,44 +426,68 @@ void initWiFi()
     ESP.restart();
   }
 
+  blinker.detach();
+
   Serial.println("WiFi Started");
-}
 
-void setup()
-{
-
-  uint16_t sj_length = 0; //半角文字数
-
-  delay(1000);
-  Serial.begin(MONITOR_SPEED);
-  setAllPortOutput();
-  setAllPortLow();
-
-  //手動で表示バッファを切り替える
-  digitalWrite(PORT_SE_IN, HIGH);
-
+  uint16_t sj_length = 0;
   //フォントデータバッファ
   uint8_t font_buf[32][16] = {0};
-  //フォント色データ　str1（半角文字毎に設定する）
+  //フォント色データ（半角文字毎に設定する）
   uint8_t font_color1[32] = {G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G};
-
-  SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, Shino_Zen_Font_file);
-
-  initWiFi();
 
   sj_length = SFR.StrDirect_ShinoFNT_readALL(MSG_CONNECTED, font_buf);
   scrollLEDMatrix(sj_length, font_buf, font_color1, 30);
 
   sj_length = SFR.StrDirect_ShinoFNT_readALL("        " + WiFi.localIP().toString(), font_buf);
   scrollLEDMatrix(sj_length, font_buf, font_color1, 30);
+}
+
+void print_blank()
+{
+  uint8_t _font_buf[8][16] = {0};
+  uint8_t _font_color[8] = {G, G, G, G, G, G, G, G};
+  printLEDMatrix(8, _font_buf, _font_color);
+}
+
+void initLCDMatrix()
+{
+  setAllPortOutput();
+
+  //手動で表示バッファを切り替えるモードに設定(HIGH:ON, LOW:OFF)
+  digitalWrite(PORT_SE_IN, HIGH);
+  digitalWrite(PORT_AB_IN, HIGH);
+
+  print_blank();
+
+  delay(1000);
+
+  blinker.attach_ms(1000, connecting);
+}
+
+void initSerial()
+{
+  Serial.begin(MONITOR_SPEED);
+}
+
+void setup()
+{
+  initSerial();
+
+  //フォントをメモリに展開
+  SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, Shino_Zen_Font_file);
+
+  initLCDMatrix();
+
+  initWiFi();
 
   //時刻取得
-  configTime( JST, 0, "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
+  configTime(JST, 0, "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
 
   clocker.attach_ms(500, blink);
 }
 
 void loop()
 {
-
+  ;
 }
