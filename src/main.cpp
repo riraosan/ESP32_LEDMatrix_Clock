@@ -472,6 +472,9 @@ void initOta()
 {
   ArduinoOTA.onStart([]() {
     String type;
+
+    clocker.detach();
+    
     if (ArduinoOTA.getCommand() == U_FLASH)
       type = "sketch";
     else
