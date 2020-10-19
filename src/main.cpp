@@ -22,11 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPAsyncWiFiManager.h>
-#include <TelnetSpy.h>
 #include <EEPROM.h>
 #include <ArduinoJson.h>
 #include <StreamUtils.h>
@@ -58,9 +57,8 @@ SOFTWARE.
 #define O 2         //橙色
 #define G 3         //緑色
 
-const char *UTF8SJIS_file = "/Utf8Sjis.tbl";        //UTF8 Shift_JIS 変換テーブルファイル名を記載しておく
-const char *Shino_Zen_Font_file = "/shnmk16.bdf";   //全角フォントファイル名を定義
-const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名を定義
+const char *UTF8SJIS_file = "/Utf8Sjis.tbl";
+const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名
 
 ESP32_SPIFFS_ShinonomeFNT SFR;
 DNSServer dns;
@@ -470,16 +468,61 @@ void initSerial()
   Serial.begin(MONITOR_SPEED);
 }
 
+void initOta()
+{
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH)
+      type = "sketch";
+    else
+      type = "filesystem";
+
+    Serial.println("Start updating " + type);
+  });
+
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR)
+      Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR)
+      Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR)
+      Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR)
+      Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR)
+      Serial.println("End Failed");
+  });
+
+  ArduinoOTA.setHostname(HOSTNAME);
+
+  Serial.print("Hostname: ");
+  Serial.println(ArduinoOTA.getHostname() + ".local");
+
+  ArduinoOTA.begin();
+  Serial.println("OTA Started");
+}
+
 void setup()
 {
   initSerial();
 
   //フォントをメモリに展開
-  SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, Shino_Zen_Font_file);
+  SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, "");
 
   initLCDMatrix();
 
   initWiFi();
+
+  initOta();
 
   //時刻取得
   configTime(JST, 0, "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
@@ -489,5 +532,5 @@ void setup()
 
 void loop()
 {
-  ;
+  ArduinoOTA.handle();
 }
