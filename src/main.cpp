@@ -32,6 +32,7 @@ SOFTWARE.
 #include <Ticker.h>
 #include <ESP32_SPIFFS_ShinonomeFNT.h>
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
+#include <esp32-hal-log.h>
 
 #define HOSTNAME "esp32"
 #define MONITOR_SPEED 115200
@@ -57,6 +58,9 @@ SOFTWARE.
 #define O 2         //橙色
 #define G 3         //緑色
 
+#define CLOCK_EN_S 6  //24hour
+#define CLOCK_EN_E 22 //24hour
+
 const char *UTF8SJIS_file = "/Utf8Sjis.tbl";
 const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名
 
@@ -66,6 +70,13 @@ AsyncWebServer server(80);
 AsyncWiFiManager wifiManager(&server, &dns);
 Ticker clocker;
 Ticker blinker;
+Ticker checker;
+
+//void log_v(format, ...); // verbose
+//void log_d(format, ...); // debug
+//void log_i(format, ...); // info
+//void log_w(format, ...); // warning
+//void log_e(format, ...); // error
 
 //LEDマトリクスの書き込みアドレスを設定
 void setRAMAdder(uint8_t lineNumber)
@@ -351,10 +362,9 @@ void setAllPortHigh()
 void PrintTime(String &str, int flag)
 {
   char tmp_str[10] = {0};
-  time_t t;
   struct tm *tm;
 
-  t = time(NULL);
+  time_t t = time(NULL);
   tm = localtime(&t);
 
   if (flag == 0)
@@ -394,24 +404,22 @@ void blink()
 void connecting()
 {
   uint16_t sj_length = 0;
-  //フォントデータバッファ
   uint8_t _font_buf[8][16] = {0};
-  //フォント色データ（半角文字毎に設定する）
   uint8_t _font_color[8] = {G, G, G, G, G, G, G, G};
 
   static int num = 0;
 
-  if (num == 0)
+  num = ~num;
+
+  if (num)
   {
     sj_length = SFR.StrDirect_ShinoFNT_readALL("        ", _font_buf);
     printLEDMatrix(sj_length, _font_buf, _font_color);
-    num = 1;
   }
   else
   {
     sj_length = SFR.StrDirect_ShinoFNT_readALL("       .", _font_buf);
     printLEDMatrix(sj_length, _font_buf, _font_color);
-    num = 0;
   }
 }
 
@@ -455,7 +463,8 @@ void initLCDMatrix()
   //手動で表示バッファを切り替えるモードに設定(HIGH:ON, LOW:OFF)
   digitalWrite(PORT_SE_IN, HIGH);
   digitalWrite(PORT_AB_IN, HIGH);
-
+  print_blank();
+  digitalWrite(PORT_AB_IN, LOW);
   print_blank();
 
   delay(1000);
@@ -474,7 +483,8 @@ void initOta()
     String type;
 
     clocker.detach();
-    
+    checker.detach();
+
     if (ArduinoOTA.getCommand() == U_FLASH)
       type = "sketch";
     else
@@ -514,6 +524,67 @@ void initOta()
   Serial.println("OTA Started");
 }
 
+/**
+ * @brief 
+ *
+ *
+ * @param 
+ * @return
+ *      - true
+ *      - false
+ */
+bool check_clock_enable(uint8_t start_hour, uint8_t end_hour)
+{
+  time_t t = time(NULL);
+  struct tm *tm = localtime(&t);
+
+  if (start_hour <= tm->tm_hour && tm->tm_hour <= end_hour)
+  {
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
+
+//60秒間隔でチェック
+void check_clock()
+{
+  bool IsClock = check_clock_enable(CLOCK_EN_S, CLOCK_EN_E);
+
+  static bool lock = true;
+
+  if (IsClock == true)
+  {
+    if (lock == true)
+    {
+      clocker.attach_ms(500, blink);
+      lock = false;
+    }
+  }
+  else
+  {
+    if (lock == false)
+    {
+      clocker.detach();
+      print_blank();
+      lock = true;
+    }
+  }
+}
+
+void initClock()
+{
+  //時刻取得
+  //configTime(JST, 0, "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
+  configTzTime("JST-9", "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
+  
+  check_clock();
+
+  checker.attach(60, check_clock);
+}
+
 void setup()
 {
   initSerial();
@@ -527,10 +598,7 @@ void setup()
 
   initOta();
 
-  //時刻取得
-  configTime(JST, 0, "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
-
-  clocker.attach_ms(500, blink);
+  initClock();
 }
 
 void loop()
