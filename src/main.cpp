@@ -38,7 +38,6 @@ SOFTWARE.
 #define MONITOR_SPEED 115200
 #define AP_NAME "ESP32-G-AP"
 #define MSG_CONNECTED "        WiFi Started."
-#define JST 3600 * 9
 
 //ポート設定
 #define PORT_SE_IN 13
@@ -58,8 +57,8 @@ SOFTWARE.
 #define O 2         //橙色
 #define G 3         //緑色
 
-#define CLOCK_EN_S 6  //24hour
-#define CLOCK_EN_E 22 //24hour
+#define CLOCK_EN_S 6  //Start AM6:00 (set 24hour)
+#define CLOCK_EN_E 22 //End   PM9:00 (set 24hour)
 
 const char *UTF8SJIS_file = "/Utf8Sjis.tbl";
 const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名
@@ -538,7 +537,9 @@ bool check_clock_enable(uint8_t start_hour, uint8_t end_hour)
   time_t t = time(NULL);
   struct tm *tm = localtime(&t);
 
-  if (start_hour <= tm->tm_hour && tm->tm_hour <= end_hour)
+  log_i("HH:MM:SS = %02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
+
+  if (start_hour <= tm->tm_hour && tm->tm_hour < end_hour)
   {
     return true;
   }
@@ -576,11 +577,8 @@ void check_clock()
 
 void initClock()
 {
-  //時刻取得
-  //configTime(JST, 0, "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
+  //Get NTP Time
   configTzTime("JST-9", "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
-  
-  check_clock();
 
   checker.attach(60, check_clock);
 }
