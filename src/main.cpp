@@ -461,12 +461,8 @@ void initLCDMatrix()
 
   //手動で表示バッファを切り替えるモードに設定(HIGH:ON, LOW:OFF)
   digitalWrite(PORT_SE_IN, HIGH);
-  digitalWrite(PORT_AB_IN, HIGH);
   print_blank();
-  digitalWrite(PORT_AB_IN, LOW);
   print_blank();
-
-  delay(1000);
 
   blinker.attach_ms(1000, connecting);
 }
