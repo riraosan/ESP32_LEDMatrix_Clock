@@ -34,7 +34,7 @@ SOFTWARE.
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
 #include <esp32-hal-log.h>
 
-#define HOSTNAME "esp32"
+#define HOSTNAME "esp32_clock"
 #define MONITOR_SPEED 115200
 #define AP_NAME "ESP32-G-AP"
 #define MSG_CONNECTED "        WiFi Started."
