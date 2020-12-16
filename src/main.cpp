@@ -62,6 +62,7 @@ SOFTWARE.
 
 const char *UTF8SJIS_file = "/Utf8Sjis.tbl";
 const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名
+const char *dummy = "";
 
 ESP32_SPIFFS_ShinonomeFNT SFR;
 DNSServer dns;
@@ -71,7 +72,7 @@ Ticker clocker;
 Ticker blinker;
 Ticker checker;
 
-//void log_v(format, ...); // verbose
+//void log_v(format, ...); // verbose 詳細
 //void log_d(format, ...); // debug
 //void log_i(format, ...); // info
 //void log_w(format, ...); // warning
@@ -404,7 +405,7 @@ void connecting()
 {
   uint16_t sj_length = 0;
   uint8_t _font_buf[8][16] = {0};
-  uint8_t _font_color[8] = {G, G, G, G, G, G, G, G};
+  uint8_t _font_color[8] = {O, O, O, O, O, O, O, O};
 
   static int num = 0;
 
@@ -464,7 +465,7 @@ void initLCDMatrix()
   print_blank();
   print_blank();
 
-  blinker.attach_ms(1000, connecting);
+  blinker.attach_ms(500, connecting);
 }
 
 void initSerial()
@@ -566,6 +567,7 @@ void check_clock()
     {
       clocker.detach();
       print_blank();
+      print_blank();
       lock = true;
     }
   }
@@ -576,23 +578,22 @@ void initClock()
   //Get NTP Time
   configTzTime("JST-9", "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
 
+  delay(2000);
+
+  check_clock();
+
   checker.attach(60, check_clock);
 }
 
 void setup()
 {
   initSerial();
-
   //フォントをメモリに展開
-  SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, "");
-
+  SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, dummy);
   initLCDMatrix();
-
   initWiFi();
-
-  initOta();
-
   initClock();
+  initOta();
 }
 
 void loop()
