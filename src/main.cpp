@@ -23,10 +23,14 @@ SOFTWARE.
 */
 
 #include <ArduinoOTA.h>
+#include <WiFiClient.h>
+#include <HTTPClient.h>
+#include <ESPmDNS.h>
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPAsyncWiFiManager.h>
 #include <EEPROM.h>
+#include <AsyncJson.h>
 #include <ArduinoJson.h>
 #include <StreamUtils.h>
 #include <Ticker.h>
@@ -58,25 +62,32 @@ SOFTWARE.
 #define G 3         //緑色
 
 #define CLOCK_EN_S 6  //Start AM6:00 (set 24hour)
-#define CLOCK_EN_E 22 //End   PM9:00 (set 24hour)
+#define CLOCK_EN_E 23 //End   PM9:00 (set 24hour)
 
 const char *UTF8SJIS_file = "/Utf8Sjis.tbl";
 const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名
 const char *dummy = "";
-
 ESP32_SPIFFS_ShinonomeFNT SFR;
+
+HTTPClient http;
+
 DNSServer dns;
 AsyncWebServer server(80);
 AsyncWiFiManager wifiManager(&server, &dns);
+
 Ticker clocker;
 Ticker blinker;
 Ticker checker;
+Ticker sensor_checker;
 
-//void log_v(format, ...); // verbose 詳細
-//void log_d(format, ...); // debug
-//void log_i(format, ...); // info
-//void log_w(format, ...); // warning
-//void log_e(format, ...); // error
+DynamicJsonDocument root(200);
+
+//log_v(format, ...); // verbose 詳細  5
+//log_d(format, ...); // debug        4
+//log_i(format, ...); // info      3
+//log_w(format, ...); // warning   2
+//log_e(format, ...); // error     1
+//log_n(format, ...); // normal    0
 
 //LEDマトリクスの書き込みアドレスを設定
 void setRAMAdder(uint8_t lineNumber)
@@ -274,7 +285,7 @@ void scrollLEDMatrix(int16_t sj_length, uint8_t font_data[][16], uint8_t color_d
 //font_data:フォントデータ（東雲フォント）
 //color_data:フォントカラーデータ（半角毎に設定する）
 ////////////////////////////////////////////////////////////////////
-void printLEDMatrix(int16_t sj_length, uint8_t font_data[][16], uint8_t color_data[])
+void printLEDMatrix(uint16_t sj_length, uint8_t font_data[][16], uint8_t color_data[])
 {
   uint8_t src_line_data[sj_length] = {0};
   uint8_t tmp_color_data[sj_length * 8] = {0};
@@ -391,7 +402,7 @@ void printTimeLEDMatrix()
   PrintTime(str, flag);
 
   //フォント色データ　str（半角文字毎に設定する）
-  uint8_t time_font_color[8] = {G, G, G, G, G, G, G, G};
+  uint8_t time_font_color[8] = {O, O, G, G, O, G, G, O};
   uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, time_font_buf);
   printLEDMatrix(sj_length, time_font_buf, time_font_color);
 }
@@ -456,6 +467,24 @@ void print_blank()
   printLEDMatrix(8, _font_buf, _font_color);
 }
 
+//半角8文字表示
+void printStatic(String str)
+{
+  uint8_t _font_buf[8][16] = {0};
+  uint8_t _font_color[8] = {G, G, G, G, G, G, G, G};
+
+  if (str.length() < 9)
+  {
+    log_i("str : %d", str.c_str());
+    uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, _font_buf);
+    printLEDMatrix(sj_length, _font_buf, _font_color);
+  }
+  else
+  {
+    log_e("coudn't set string. string length : %d", str.length());
+  }
+}
+
 void initLCDMatrix()
 {
   setAllPortOutput();
@@ -480,44 +509,71 @@ void initOta()
 
     clocker.detach();
     checker.detach();
+    print_blank();
 
     if (ArduinoOTA.getCommand() == U_FLASH)
+    {
       type = "sketch";
+      printStatic("sketch  ");
+    }
     else
+    {
       type = "filesystem";
-
-    Serial.println("Start updating " + type);
+      printStatic("spiffs  ");
+    }
+    log_d("Start updating %s\r\n", type.c_str());
   });
 
   ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
+    printStatic("**End** ");
+    log_d("End");
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    String str = String(progress / (total / 100));
+
+    str += "%";
+    str.trim();
+
+    log_d("Progress: %s%%", str.c_str());
+    log_printf("\033[1F");
+
+    printStatic(str);
   });
 
   ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
+    log_e("Error[%u]: ", error);
+    printStatic("Error!!!");
+
     if (error == OTA_AUTH_ERROR)
-      Serial.println("Auth Failed");
+    {
+      log_e("Auth Failed");
+    }
     else if (error == OTA_BEGIN_ERROR)
-      Serial.println("Begin Failed");
+    {
+      log_e("Begin Failed");
+    }
     else if (error == OTA_CONNECT_ERROR)
-      Serial.println("Connect Failed");
+    {
+      log_e("Connect Failed");
+    }
     else if (error == OTA_RECEIVE_ERROR)
-      Serial.println("Receive Failed");
+    {
+      log_e("Receive Failed");
+    }
     else if (error == OTA_END_ERROR)
-      Serial.println("End Failed");
+    {
+      log_e("End Failed");
+    }
   });
 
+  ArduinoOTA.setMdnsEnabled(true);
   ArduinoOTA.setHostname(HOSTNAME);
 
-  Serial.print("Hostname: ");
-  Serial.println(ArduinoOTA.getHostname() + ".local");
+  log_d("- Hostname : %s.local", ArduinoOTA.getHostname().c_str());
 
   ArduinoOTA.begin();
-  Serial.println("OTA Started");
+  log_d("- OTA Started");
 }
 
 /**
@@ -585,8 +641,38 @@ void initClock()
   checker.attach(60, check_clock);
 }
 
+String getServerInfo(String hostName, String uri)
+{
+  String resultJson;
+
+  log_d("Starting connection to %s.local Web server...", hostName.c_str());
+
+  IPAddress ip = MDNS.queryHost(hostName);
+
+  log_i("Hostname:%s ipaddress:%s", hostName.c_str(), ip.toString().c_str());
+
+  http.begin(ip.toString(), 80, uri);
+
+  int httpCode = http.GET();
+
+  if (httpCode < 0)
+  {
+    log_e("Connection failed! code : %d", httpCode);
+    resultJson = "";
+  }
+  else
+  {
+    log_i("Connected to server! code : %d", httpCode);
+    resultJson = http.getString();
+  }
+
+  http.end();
+  return resultJson;
+}
+
 void setup()
 {
+  String jsonBody;
   initSerial();
   //フォントをメモリに展開
   SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, dummy);
@@ -594,6 +680,12 @@ void setup()
   initWiFi();
   initClock();
   initOta();
+
+  //jsonBody = getServerInfo("esp32", "/esp/clock");
+  //jsonBody = getServerInfo("esp32", "/esp/sensor/temperatur");
+  jsonBody = getServerInfo("esp32", "/esp/sensor/all");
+
+  log_d("Body = %s", jsonBody.c_str());
 }
 
 void loop()
