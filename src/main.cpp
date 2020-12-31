@@ -92,6 +92,8 @@ enum class MESSAGE
 
 MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
 
+static uint8_t retry = 0;
+
 //log_v(format, ...); // verbose 詳細  5
 //log_d(format, ...); // debug        4
 //log_i(format, ...); // info      3
@@ -768,19 +770,34 @@ void loop()
     String json = getServerInfo("esp32", "/esp/sensor/all");
     if (json.isEmpty())
     {
-      checkSensor();
-      break;
+      if (retry < 2)
+      {
+        retry++;
+        checkSensor();
+        delay(3000);
+        break;
+      }
+      else
+      {
+        retry = 0;
+        message = MESSAGE::MSG_COMMAND_NOTHING;
+        break;
+      }
     }
+    else
+    {
+      retry = 0;
 
-    log_d("Body = %s", json.c_str());
-    deserializeJson(doc, json);
+      log_d("Body = %s", json.c_str());
+      deserializeJson(doc, json);
 
-    clocker.detach();
+      clocker.detach();
 
-    print_blank();
-    print_blank();
+      print_blank();
+      print_blank();
 
-    message = MESSAGE::MSG_COMMAND_TEMPERATURE;
+      message = MESSAGE::MSG_COMMAND_TEMPERATURE;
+    }
   }
   break;
   case MESSAGE::MSG_COMMAND_TEMPERATURE:
