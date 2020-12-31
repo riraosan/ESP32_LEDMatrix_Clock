@@ -64,12 +64,10 @@ SOFTWARE.
 #define CLOCK_EN_S 6  //Start AM6:00 (set 24hour)
 #define CLOCK_EN_E 23 //End   PM9:00 (set 24hour)
 
+ESP32_SPIFFS_ShinonomeFNT SFR;
 const char *UTF8SJIS_file = "/Utf8Sjis.tbl";
 const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名
-const char *dummy = "";
-ESP32_SPIFFS_ShinonomeFNT SFR;
-
-HTTPClient http;
+const char *dummy = "/";
 
 DNSServer dns;
 AsyncWebServer server(80);
@@ -80,7 +78,19 @@ Ticker blinker;
 Ticker checker;
 Ticker sensor_checker;
 
-DynamicJsonDocument root(200);
+DynamicJsonDocument doc(192); //json body
+
+enum class MESSAGE
+{
+  MSG_COMMAND_NOTHING,
+  MSG_COMMAND_SENSOR,
+  MSG_COMMAND_TEMPERATURE,
+  MSG_COMMAND_PRESSURE,
+  MSG_COMMAND_HUMIDITY,
+  MSG_COMMAND_CLOCK,
+};
+
+MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
 
 //log_v(format, ...); // verbose 詳細  5
 //log_d(format, ...); // debug        4
@@ -475,7 +485,7 @@ void printStatic(String str)
 
   if (str.length() < 9)
   {
-    log_i("str : %d", str.c_str());
+    log_i("str : %s", str.c_str());
     uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, _font_buf);
     printLEDMatrix(sj_length, _font_buf, _font_color);
   }
@@ -507,38 +517,41 @@ void initOta()
   ArduinoOTA.onStart([]() {
     String type;
 
+    print_blank();
+
     clocker.detach();
     checker.detach();
-    print_blank();
+    sensor_checker.detach();
 
     if (ArduinoOTA.getCommand() == U_FLASH)
     {
       type = "sketch";
-      printStatic("sketch  ");
+      printStatic("sketch..");
     }
     else
     {
       type = "filesystem";
-      printStatic("spiffs  ");
+      printStatic("spiffs..");
     }
-    log_d("Start updating %s\r\n", type.c_str());
+    log_d("Start updating : %s\r\n", type.c_str());
   });
 
   ArduinoOTA.onEnd([]() {
-    printStatic("**End** ");
+    printStatic("Uploaded");
     log_d("End");
+    delay(2000);
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     String str = String(progress / (total / 100));
 
-    str += "%";
-    str.trim();
-
     log_d("Progress: %s%%", str.c_str());
     log_printf("\033[1F");
 
-    printStatic(str);
+    str += "%";
+    str.trim();
+
+    //printStatic(str);
   });
 
   ArduinoOTA.onError([](ota_error_t error) {
@@ -628,6 +641,42 @@ void check_clock()
     }
   }
 }
+String getServerInfo(String hostName, String uri)
+{
+  String jsonBody;
+  HTTPClient http;
+
+  log_d("Starting connection to %s.local Web server...", hostName.c_str());
+
+  IPAddress ip = MDNS.queryHost(hostName);
+  log_i("Hostname : %s IPaddress : %s", hostName.c_str(), ip.toString().c_str());
+
+  http.begin(ip.toString(), 80, uri);
+  int httpCode = http.GET();
+
+  if (httpCode < 0)
+  {
+    log_e("Connection failed! code : %d", httpCode);
+    jsonBody = "";
+  }
+  else
+  {
+    log_i("Connected to server! code : %d", httpCode);
+    jsonBody = http.getString();
+  }
+
+  if (http.connected())
+  {
+    http.end();
+  }
+
+  return jsonBody;
+}
+
+void checkSensor()
+{
+  message = MESSAGE::MSG_COMMAND_SENSOR;
+}
 
 void initClock()
 {
@@ -639,40 +688,60 @@ void initClock()
   check_clock();
 
   checker.attach(60, check_clock);
+  sensor_checker.attach(60 * 15, checkSensor);
+  //sensor_checker.attach(60, checkSensor);
 }
 
-String getServerInfo(String hostName, String uri)
+void printTemperature()
 {
-  String resultJson;
+  String temperature;
+  char buffer[10] = {0};
 
-  log_d("Starting connection to %s.local Web server...", hostName.c_str());
+  float _temperatur = doc["temperatur"]; // 21.93
 
-  IPAddress ip = MDNS.queryHost(hostName);
+  snprintf(buffer, 9, "T,%2.1f*C", _temperatur);
+  temperature = buffer;
+  log_i("temperature : [%s]", temperature.c_str());
 
-  log_i("Hostname:%s ipaddress:%s", hostName.c_str(), ip.toString().c_str());
+  printStatic(temperature);
 
-  http.begin(ip.toString(), 80, uri);
+  delay(5000);
+}
 
-  int httpCode = http.GET();
+void printPressur()
+{
+  String pressur;
+  char buffer[10] = {0};
 
-  if (httpCode < 0)
-  {
-    log_e("Connection failed! code : %d", httpCode);
-    resultJson = "";
-  }
-  else
-  {
-    log_i("Connected to server! code : %d", httpCode);
-    resultJson = http.getString();
-  }
+  float _pressur = doc["pressur"]; // 1015.944
 
-  http.end();
-  return resultJson;
+  snprintf(buffer, 9, "P,%4.1f", _pressur);
+  pressur = buffer;
+  log_i("pressur : [%s]", pressur.c_str());
+
+  printStatic(pressur);
+
+  delay(5000);
+}
+
+void printHumidity()
+{
+  String humidity;
+  char buffer[10] = {0};
+
+  float _humidity = doc["humidity"]; // 39.27832
+
+  snprintf(buffer, 9, "H, %2.1f%%", _humidity);
+  humidity = buffer;
+  log_i("humidity : [%s]", humidity.c_str());
+
+  printStatic(humidity);
+
+  delay(5000);
 }
 
 void setup()
 {
-  String jsonBody;
   initSerial();
   //フォントをメモリに展開
   SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, dummy);
@@ -680,15 +749,57 @@ void setup()
   initWiFi();
   initClock();
   initOta();
-
-  //jsonBody = getServerInfo("esp32", "/esp/clock");
-  //jsonBody = getServerInfo("esp32", "/esp/sensor/temperatur");
-  jsonBody = getServerInfo("esp32", "/esp/sensor/all");
-
-  log_d("Body = %s", jsonBody.c_str());
+  /*
+  //for test
+  String json = getServerInfo("esp32", "/esp/sensor/all");
+  log_d("Body = %s", json.c_str());
+  deserializeJson(doc, json);
+ */
 }
 
 void loop()
 {
   ArduinoOTA.handle();
+
+  switch (message)
+  {
+  case MESSAGE::MSG_COMMAND_SENSOR:
+  {
+    String json = getServerInfo("esp32", "/esp/sensor/all");
+    if (json.isEmpty())
+    {
+      checkSensor();
+      break;
+    }
+
+    log_d("Body = %s", json.c_str());
+    deserializeJson(doc, json);
+
+    clocker.detach();
+
+    print_blank();
+    print_blank();
+
+    message = MESSAGE::MSG_COMMAND_TEMPERATURE;
+  }
+  break;
+  case MESSAGE::MSG_COMMAND_TEMPERATURE:
+    printTemperature();
+    message = MESSAGE::MSG_COMMAND_HUMIDITY;
+    break;
+  case MESSAGE::MSG_COMMAND_HUMIDITY:
+    printHumidity();
+    message = MESSAGE::MSG_COMMAND_PRESSURE;
+    break;
+  case MESSAGE::MSG_COMMAND_PRESSURE:
+    printPressur();
+    message = MESSAGE::MSG_COMMAND_CLOCK;
+    break;
+  case MESSAGE::MSG_COMMAND_CLOCK:
+    clocker.attach_ms(500, blink);
+    message = MESSAGE::MSG_COMMAND_NOTHING;
+    break;
+  case MESSAGE::MSG_COMMAND_NOTHING:
+  default:; //nothing
+  }
 }
