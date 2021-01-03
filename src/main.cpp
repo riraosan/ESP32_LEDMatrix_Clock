@@ -656,8 +656,8 @@ void initClock()
     check_clock();
 
     checker.attach(60, check_clock);
-    sensor_checker.attach(60 * 15, checkSensor);
-    //sensor_checker.attach(60, checkSensor);
+    //sensor_checker.attach(60 * 15, checkSensor);
+    sensor_checker.attach(60, checkSensor);
 }
 
 void printTemperature()
@@ -783,7 +783,7 @@ void loop()
         break;
     case MESSAGE::MSG_COMMAND_PRESSURE:
 
-        printPressur();
+        //printPressur();
         message = MESSAGE::MSG_COMMAND_CLOCK;
         break;
     case MESSAGE::MSG_COMMAND_CLOCK:
