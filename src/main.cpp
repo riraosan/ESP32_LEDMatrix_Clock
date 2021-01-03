@@ -574,6 +574,25 @@ bool check_clock_enable(uint8_t start_hour, uint8_t end_hour)
     }
 }
 
+void checkSensor()
+{
+    message = MESSAGE::MSG_COMMAND_SENSOR;
+}
+
+void stopClock()
+{
+    clocker.detach();
+    sensor_checker.detach();
+    active = false;
+}
+
+void startClock()
+{
+    clocker.attach_ms(500, blink);
+    sensor_checker.attach(60, checkSensor);
+    active = true;
+}
+
 void check_clock()
 {
     bool IsClock = check_clock_enable(CLOCK_EN_S, CLOCK_EN_E);
@@ -582,7 +601,7 @@ void check_clock()
     {
         if (active == false)
         {
-            clocker.attach_ms(500, blink);
+            startClock();
             active = true;
         }
     }
@@ -590,7 +609,7 @@ void check_clock()
     {
         if (active == true)
         {
-            clocker.detach();
+            stopClock();
             clearLEDMatrix();
             active = false;
         }
@@ -627,23 +646,6 @@ String getServerInfo(String hostName, String uri)
     }
 
     return jsonBody;
-}
-
-void checkSensor()
-{
-    message = MESSAGE::MSG_COMMAND_SENSOR;
-}
-
-void stopClock()
-{
-    clocker.detach();
-    active = false;
-}
-
-void startClock()
-{
-    clocker.attach_ms(500, blink);
-    active = true;
 }
 
 void initClock()
