@@ -1,4 +1,4 @@
-/* 
+/*
 The MIT License (MIT)
 
 Copyright (c) 2020 riraotech.com
@@ -667,9 +667,9 @@ void printTemperature()
     String temperature;
     char buffer[10] = {0};
 
-    float _temperatur = doc["temperatur"]; // 21.93
+    float _temperature = doc["temperatur"]; // 21.93
 
-    snprintf(buffer, 9, "T,%2.1f*C", _temperatur);
+    snprintf(buffer, 9, "T:%2.1f*C", _temperature);
     temperature = buffer;
     log_i("temperature : [%s]", temperature.c_str());
 
@@ -685,7 +685,7 @@ void printPressur()
 
     float _pressur = doc["pressur"]; // 1015.944
 
-    snprintf(buffer, 9, "P,%4.1f", _pressur);
+    snprintf(buffer, 9, "P:%4.1f", _pressur);
     pressur = buffer;
     log_i("pressur : [%s]", pressur.c_str());
 
