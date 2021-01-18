@@ -667,7 +667,7 @@ void printTemperature()
     String temperature;
     char buffer[10] = {0};
 
-    float _temperatur = doc["temperatur"]; // 21.93
+    float _temperature = doc["temperatur"]; // 21.93
 
     snprintf(buffer, 9, "T:%2.1f*C", _temperatur);
     temperature = buffer;
