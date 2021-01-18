@@ -1,7 +1,7 @@
-/* 
+/*
 The MIT License (MIT)
 
-Copyright (c) 2020 riraotech.com
+Copyright (c) 2020-2021 riraotech.com
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -460,7 +460,7 @@ void printStatic(String str)
     }
     else
     {
-        log_e("coudn't set string. string length : %d", str.length());
+        log_e("couldn't set string. string length : %d", str.length());
     }
 }
 
@@ -669,7 +669,7 @@ void printTemperature()
 
     float _temperatur = doc["temperatur"]; // 21.93
 
-    snprintf(buffer, 9, "T,%2.1f*C", _temperatur);
+    snprintf(buffer, 9, "T:%2.1f*C", _temperatur);
     temperature = buffer;
     log_i("temperature : [%s]", temperature.c_str());
 
@@ -685,7 +685,7 @@ void printPressur()
 
     float _pressur = doc["pressur"]; // 1015.944
 
-    snprintf(buffer, 9, "P,%4.1f", _pressur);
+    snprintf(buffer, 9, "P:%4.1f", _pressur);
     pressur = buffer;
     log_i("pressur : [%s]", pressur.c_str());
 
@@ -701,7 +701,7 @@ void printHumidity()
 
     float _humidity = doc["humidity"]; // 39.27832
 
-    snprintf(buffer, 9, "H, %2.1f%%", _humidity);
+    snprintf(buffer, 9, "H:%2.1f%%", _humidity);
     humidity = buffer;
     log_i("humidity : [%s]", humidity.c_str());
 
