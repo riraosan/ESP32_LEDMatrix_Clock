@@ -22,6 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+//Clockはセントラル（BLEクライアント）になる
+// red >AB Shutter3       , Address: ff:ff:3d:f9:98:73, appearance: 961, serviceUUID: 00001812-0000-1000-8000-00805f9b34fb ペリフェラル（BLEサーバー）
+// blue>AB Shutter3       , Address: ff:ff:ae:c7:9c:96, appearance: 961, serviceUUID: 00001812-0000-1000-8000-00805f9b34fb　ペリフェラル（BLEサーバー）
+
 #include <ArduinoOTA.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
@@ -29,14 +33,25 @@ SOFTWARE.
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPAsyncWiFiManager.h>
-#include <EEPROM.h>
+//#include <EEPROM.h>
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
-#include <StreamUtils.h>
+//#include <StreamUtils.h>
 #include <Ticker.h>
 #include <ESP32_SPIFFS_ShinonomeFNT.h>
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
 #include <esp32-hal-log.h>
+
+#include <BLEDevice.h>
+#include <BLEScan.h>
+
+// The remote service we wish to connect to.
+static BLEUUID serviceUUID("00001812-0000-1000-8000-00805f9b34fb");
+// The characteristic of the remote service we are interested in.
+static BLEUUID charUUID("00002a4d-0000-1000-8000-00805f9b34fb"); //DISO AB Shutter3(red)
+
+static BLEAddress *pServerAddress;
+static BLERemoteCharacteristic *pRemoteCharacteristic;
 
 #define HOSTNAME "esp32_clock"
 #define DIST_HOSTNAME "esp32"
@@ -91,6 +106,11 @@ enum class MESSAGE
     MSG_COMMAND_PRESSURE,
     MSG_COMMAND_HUMIDITY,
     MSG_COMMAND_CLOCK,
+    MSG_COMMAND_BLE_INIT,
+    MSG_COMMAND_BLE_DO_CONNECT,
+    MSG_COMMAND_BLE_CONNECTED,
+    MSG_COMMAND_BLE_DISCONNECTED,
+    MSG_COMMAND_BLE_NOT_FOUND,
 };
 
 MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
@@ -669,7 +689,7 @@ void printTemperature()
 
     float _temperature = doc["temperatur"]; // 21.93
 
-    snprintf(buffer, 9, "T:%2.1f*C", _temperatur);
+    snprintf(buffer, 9, "T:%2.1f*C", _temperature);
     temperature = buffer;
     log_i("temperature : [%s]", temperature.c_str());
 
@@ -753,6 +773,116 @@ void getBME280Info()
     }
 }
 
+static void notifyCallback(BLERemoteCharacteristic *pBLERemoteCharacteristic, uint8_t *pData, size_t length, bool isNotify)
+{
+    log_i("Notify callback for characteristic %s of data length %d", pBLERemoteCharacteristic->getUUID().toString().c_str(), length);
+}
+
+class MyClientCallback : public BLEClientCallbacks
+{
+    void onConnect(BLEClient *pclient)
+    {
+        log_i("onConnect");
+        message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
+    }
+
+    void onDisconnect(BLEClient *pclient)
+    {
+        log_i("onDisconnect");
+        message = MESSAGE::MSG_COMMAND_BLE_DISCONNECTED;
+    }
+};
+
+bool connectToServer(BLEAddress pAddress)
+{
+    log_i("Forming a connection to %s", pAddress.toString().c_str());
+
+    BLEClient *pClient = BLEDevice::createClient();
+    log_i(" - Created client");
+
+    pClient->setClientCallbacks(new MyClientCallback());
+
+    // Connect to the remove BLE Server.
+    pClient->connect(pAddress);
+    log_i(" - Connected to server");
+
+    // Obtain a reference to the service we are after in the remote BLE server.
+    BLERemoteService *pRemoteService = pClient->getService(serviceUUID);
+    if (pRemoteService == nullptr)
+    {
+        log_i("Failed to find our service UUID: %s", serviceUUID.toString().c_str());
+        return false;
+    }
+    log_i(" - Found our service");
+
+    // Obtain a reference to the characteristic in the service of the remote BLE server.
+    pRemoteCharacteristic = pRemoteService->getCharacteristic(charUUID);
+    if (pRemoteCharacteristic == nullptr)
+    {
+        log_i("Failed to find our characteristic UUID: %s", charUUID.toString().c_str());
+        return false;
+    }
+
+    log_i(" - Found our characteristic");
+
+    // Read the value of the characteristic.
+    std::string value = pRemoteCharacteristic->readValue();
+    log_i("The characteristic value was: %s", value.c_str());
+
+    pRemoteCharacteristic->registerForNotify(notifyCallback);
+
+    return true;
+}
+
+/**
+ * Scan for BLE servers and find the first one that advertises the service we are looking for.
+ */
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
+{
+    /**
+   * Called for each advertising BLE server.
+   */
+    void onResult(BLEAdvertisedDevice advertisedDevice)
+    {
+        log_i("BLE Advertised Device found: %s", advertisedDevice.toString().c_str());
+
+        // We have found a device, let us now see if it contains the service we are looking for.
+        if (advertisedDevice.haveServiceUUID() && advertisedDevice.getServiceUUID().equals(serviceUUID))
+        {
+            log_i("Found our device!  address: %s", advertisedDevice.getAddress().toString().c_str());
+            advertisedDevice.getScan()->stop();
+
+            pServerAddress = new BLEAddress(advertisedDevice.getAddress());
+            message = MESSAGE::MSG_COMMAND_BLE_DO_CONNECT;
+
+        } // Found our server
+        else
+        {
+            message = MESSAGE::MSG_COMMAND_BLE_NOT_FOUND;
+        } // Not found our server
+    }     // onResult
+};        // MyAdvertisedDeviceCallbacks
+
+static MyAdvertisedDeviceCallbacks *pAdvertisedDeviceCallback;
+
+void initBLE()
+{
+    log_i("Starting Arduino BLE Client application...");
+
+    BLEDevice::deinit();
+
+    BLEDevice::init("");
+    // Retrieve a Scanner and set the callback we want to use to be informed when we
+    // have detected a new device.  Specify that we want active scanning and start the
+    // scan to run for 30 seconds.
+    BLEScan *pBLEScan = BLEDevice::getScan();
+    pAdvertisedDeviceCallback = new MyAdvertisedDeviceCallbacks();
+
+    pBLEScan->setAdvertisedDeviceCallbacks(pAdvertisedDeviceCallback);
+    pBLEScan->setActiveScan(true);
+    pBLEScan->start(30); //waitting to find BLE server
+}
+
 void setup()
 {
     initSerial();
@@ -762,6 +892,7 @@ void setup()
     initClock();
     initOta();
     initHttpClient();
+    message = MESSAGE::MSG_COMMAND_BLE_INIT;
 }
 
 void loop()
@@ -793,7 +924,70 @@ void loop()
         startClock();
         message = MESSAGE::MSG_COMMAND_NOTHING;
         break;
+    case MESSAGE::MSG_COMMAND_BLE_INIT:
+        initBLE();
+        // onResult() set to MSG_COMMAND_BLE_DO_CONNECT or MSG_COMMAND_BLE_NOT_FOUND
+        break;
+    case MESSAGE::MSG_COMMAND_BLE_DO_CONNECT:
+        log_i("We wish to connect BLE Server. pServerAddress = 0x%x", pServerAddress);
+        // We have scanned for and found the desired BLE Server with which we wish to connect.
+        // Now we connect to it. Once we are connected we set "MSG_COMMAND_BLE_CONNECTED"
+        if (connectToServer(*pServerAddress))
+        {
+            log_i("We are now connected to the BLE Server");
+            /*
+            if (pAdvertisedDeviceCallback != nullptr)
+            {
+                delete pAdvertisedDeviceCallback;
+            }
+*/
+            message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
+        }
+        else
+        {
+            log_i("We have failed to connect to the server; there is nothing more we will do.");
+            message = MESSAGE::MSG_COMMAND_BLE_DISCONNECTED;
+        }
+        break;
+    case MESSAGE::MSG_COMMAND_BLE_CONNECTED:
+        log_i("We are connected to a peer BLE Server");
+        // If we are connected to a peer BLE Server, update the characteristic each time we are reached
+        // with the current time since boot.
+
+        //String newValue = "Time since boot: " + String(millis() / 1000);
+        //log_i("Setting new characteristic value to \"%s\"", newValue.c_str());
+
+        // Set the characteristic's value to be the array of bytes that is actually a string.
+        //pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
+        message = MESSAGE::MSG_COMMAND_NOTHING;
+        break;
+    case MESSAGE::MSG_COMMAND_BLE_DISCONNECTED:
+        log_i("Disconnected our service");
+
+        //TODO LED ON or OFF? To indicate for human.
+        /*
+        if (pServerAddress != nullptr)
+        {
+            delete pServerAddress;
+        }
+*/
+        message = MESSAGE::MSG_COMMAND_BLE_INIT;
+        break;
+    case MESSAGE::MSG_COMMAND_BLE_NOT_FOUND:
+        log_i("Not found our service");
+
+        //TODO LED ON or OFF? To indicate for human.
+        /*
+        if (pAdvertisedDeviceCallback != nullptr)
+        {
+            delete pAdvertisedDeviceCallback;
+        }
+*/
+        message = MESSAGE::MSG_COMMAND_NOTHING;
+        break;
     case MESSAGE::MSG_COMMAND_NOTHING:
     default:; //nothing
     }
+
+    yield();
 }
