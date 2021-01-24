@@ -22,7 +22,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-//Clockはセントラル（BLEクライアント）になる
 // red >AB Shutter3       , Address: ff:ff:3d:f9:98:73, appearance: 961, serviceUUID: 00001812-0000-1000-8000-00805f9b34fb ペリフェラル（BLEサーバー）
 // blue>AB Shutter3       , Address: ff:ff:ae:c7:9c:96, appearance: 961, serviceUUID: 00001812-0000-1000-8000-00805f9b34fb　ペリフェラル（BLEサーバー）
 
@@ -33,20 +32,19 @@ SOFTWARE.
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPAsyncWiFiManager.h>
-//#include <EEPROM.h>
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
-//#include <StreamUtils.h>
 #include <Ticker.h>
 #include <ESP32_SPIFFS_ShinonomeFNT.h>
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
+#include <SerialTelnetBridge.h>
 #include <esp32-hal-log.h>
 
 #include <BLEDevice.h>
 #include <BLEScan.h>
 
 // The remote service we wish to connect to.
-static BLEUUID serviceUUID("00001812-0000-1000-8000-00805f9b34fb");
+static BLEUUID serviceUUID("00001812-0000-1000-8000-00805f9b34fb"); //DISO AB Shutter3(red)
 // The characteristic of the remote service we are interested in.
 static BLEUUID charUUID("00002a4d-0000-1000-8000-00805f9b34fb"); //DISO AB Shutter3(red)
 
@@ -94,6 +92,8 @@ Ticker clocker;
 Ticker blinker;
 Ticker checker;
 Ticker sensor_checker;
+
+//SerialTelnetBridgeClass inSTB;
 
 DynamicJsonDocument doc(192); //store json body
 
@@ -926,7 +926,6 @@ void loop()
         break;
     case MESSAGE::MSG_COMMAND_BLE_INIT:
         initBLE();
-        // onResult() set to MSG_COMMAND_BLE_DO_CONNECT or MSG_COMMAND_BLE_NOT_FOUND
         break;
     case MESSAGE::MSG_COMMAND_BLE_DO_CONNECT:
         log_i("We wish to connect BLE Server. pServerAddress = 0x%x", pServerAddress);
@@ -935,12 +934,6 @@ void loop()
         if (connectToServer(*pServerAddress))
         {
             log_i("We are now connected to the BLE Server");
-            /*
-            if (pAdvertisedDeviceCallback != nullptr)
-            {
-                delete pAdvertisedDeviceCallback;
-            }
-*/
             message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
         }
         else
@@ -965,24 +958,12 @@ void loop()
         log_i("Disconnected our service");
 
         //TODO LED ON or OFF? To indicate for human.
-        /*
-        if (pServerAddress != nullptr)
-        {
-            delete pServerAddress;
-        }
-*/
         message = MESSAGE::MSG_COMMAND_BLE_INIT;
         break;
     case MESSAGE::MSG_COMMAND_BLE_NOT_FOUND:
         log_i("Not found our service");
 
         //TODO LED ON or OFF? To indicate for human.
-        /*
-        if (pAdvertisedDeviceCallback != nullptr)
-        {
-            delete pAdvertisedDeviceCallback;
-        }
-*/
         message = MESSAGE::MSG_COMMAND_NOTHING;
         break;
     case MESSAGE::MSG_COMMAND_NOTHING:
