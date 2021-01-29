@@ -689,7 +689,7 @@ void printTemperature()
 
     float _temperature = doc["temperatur"]; // 21.93
 
-    snprintf(buffer, 9, "T:%2.1f*C", _temperature);
+    snprintf(buffer, 9, "T:%4.1f*C", _temperature);
     temperature = buffer;
     log_i("temperature : [%s]", temperature.c_str());
 
@@ -705,7 +705,7 @@ void printPressur()
 
     float _pressur = doc["pressur"]; // 1015.944
 
-    snprintf(buffer, 9, "P:%4.1f", _pressur);
+    snprintf(buffer, 9, "P:%6.1f", _pressur);
     pressur = buffer;
     log_i("pressur : [%s]", pressur.c_str());
 
@@ -721,7 +721,7 @@ void printHumidity()
 
     float _humidity = doc["humidity"]; // 39.27832
 
-    snprintf(buffer, 9, "H:%2.1f%%", _humidity);
+    snprintf(buffer, 9, "H:%5.1f%%", _humidity);
     humidity = buffer;
     log_i("humidity : [%s]", humidity.c_str());
 
