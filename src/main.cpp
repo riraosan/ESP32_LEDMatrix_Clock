@@ -20,28 +20,24 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+inspired by:
+
 */
 
-// red >AB Shutter3       , Address: ff:ff:3d:f9:98:73, appearance: 961, serviceUUID: 00001812-0000-1000-8000-00805f9b34fb ペリフェラル（BLEサーバー）
-// blue>AB Shutter3       , Address: ff:ff:ae:c7:9c:96, appearance: 961, serviceUUID: 00001812-0000-1000-8000-00805f9b34fb　ペリフェラル（BLEサーバー）
-
-#include <ArduinoOTA.h>
-#include <WiFiClient.h>
-#include <HTTPClient.h>
+#include <Arduino.h>
+#include <SerialTelnetBridge.h>
 #include <ESPmDNS.h>
-#include <DNSServer.h>
-#include <ESPAsyncWebServer.h>
-#include <ESPAsyncWiFiManager.h>
+#include <HTTPClient.h>
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
 #include <Ticker.h>
-#include <ESP32_SPIFFS_ShinonomeFNT.h>
-#include <ESP32_SPIFFS_UTF8toSJIS.h>
-#include <SerialTelnetBridge.h>
-#include <esp32-hal-log.h>
-
 #include <BLEDevice.h>
 #include <BLEScan.h>
+#include <ESP32_SPIFFS_ShinonomeFNT.h>
+#include <ESP32_SPIFFS_UTF8toSJIS.h>
+
+#include <esp32-hal-log.h>
 
 // The remote service we wish to connect to.
 static BLEUUID serviceUUID("00001812-0000-1000-8000-00805f9b34fb"); //DISO AB Shutter3(red)
@@ -53,7 +49,6 @@ static BLERemoteCharacteristic *pRemoteCharacteristic;
 
 #define HOSTNAME "esp32_clock"
 #define DIST_HOSTNAME "esp32"
-#define MONITOR_SPEED 115200
 #define AP_NAME "ESP32-G-AP"
 #define MSG_CONNECTED "        WiFi Started."
 
@@ -75,27 +70,31 @@ static BLERemoteCharacteristic *pRemoteCharacteristic;
 #define O 2         //orange
 #define G 3         //green
 
-#define CLOCK_EN_S 6  //Start AM6:00 (set 24hour)
-#define CLOCK_EN_E 23 //End   PM9:00 (set 24hour)
+#define CLOCK_EN_S 6  //Start AM 6:00
+#define CLOCK_EN_E 22 //End   PM10:00
 
-ESP32_SPIFFS_ShinonomeFNT SFR;
-const char *UTF8SJIS_file = "/Utf8Sjis.tbl";
-const char *Shino_Half_Font_file = "/shnm8x16.bdf"; //半角フォントファイル名
-const char *dummy = "/";
-
-DNSServer dns;
-AsyncWebServer server(80);
-AsyncWiFiManager wifiManager(&server, &dns);
+const String UTF8SJIS_FILE("/Utf8Sjis.tbl");
+const String SHINO_HALF_FONT_FILE("/shnm8x16.bdf"); //半角フォントファイル名
+const String DUMMY("/");
 const String APIURI("/esp/sensor/all");
+
+const String sensors_all("/api/v1/devices/sensors/1/all");
+const String sensors_temperature("/api/v1/devices/sensors/1/temperature");
+const String sensors_humidity("/api/v1/devices/sensors/1/humidity");
+const String sensors_pressure("/api/v1/devices/sensors/1/pressure");
 
 Ticker clocker;
 Ticker blinker;
 Ticker checker;
 Ticker sensor_checker;
 
-//SerialTelnetBridgeClass inSTB;
+StaticJsonDocument<384> doc;
+StaticJsonDocument<384> _root;
 
-DynamicJsonDocument doc(192); //store json body
+ESP32_SPIFFS_ShinonomeFNT SFR;
+SerialTelnetBridgeClass stb;
+
+AsyncWebServer *g_server = stb.getAsyncWebServerPtr();
 
 //message ID
 enum class MESSAGE
@@ -115,15 +114,8 @@ enum class MESSAGE
 
 MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
 
-static uint8_t retry = 0;   //GET request retry count
-static bool active = false; //clock check timer state
-
-//log_v(format, ...); // verbose   5
-//log_d(format, ...); // debug     4
-//log_i(format, ...); // info      3
-//log_w(format, ...); // warning   2
-//log_e(format, ...); // error     1
-//log_n(format, ...); // normal    0
+static uint8_t retry = 0;   //Retry GET request
+static bool active = false; //Check clock state
 
 //Write setting to LED Panel
 void setRAMAdder(uint8_t lineNumber)
@@ -430,19 +422,8 @@ void connecting()
     }
 }
 
-void initWiFi()
+void printConnected()
 {
-    wifiManager.setDebugOutput(true);
-
-    if (!wifiManager.autoConnect(AP_NAME))
-    {
-        ESP.restart();
-    }
-
-    blinker.detach();
-
-    Serial.println("WiFi Started");
-
     uint16_t sj_length = 0;
     uint8_t font_buf[32][16] = {0};
     uint8_t font_color1[32] = {G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G};
@@ -484,97 +465,20 @@ void printStatic(String str)
     }
 }
 
-void initLCDMatrix()
+void initFont()
 {
+    SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_FILE.c_str(), SHINO_HALF_FONT_FILE.c_str(), DUMMY.c_str());
+}
+
+void initLEDMatrix()
+{
+    initFont();
+
     setAllPortOutput();
 
     digitalWrite(PORT_SE_IN, HIGH); //to change manual mode
     print_blank();
     print_blank();
-
-    blinker.attach_ms(500, connecting);
-}
-
-void initSerial()
-{
-    Serial.begin(MONITOR_SPEED);
-}
-
-void initOta()
-{
-    ArduinoOTA.onStart([]() {
-        String type;
-
-        print_blank();
-
-        clocker.detach();
-        checker.detach();
-        sensor_checker.detach();
-
-        if (ArduinoOTA.getCommand() == U_FLASH)
-        {
-            type = "sketch";
-            printStatic("sketch..");
-        }
-        else
-        {
-            type = "filesystem";
-            printStatic("spiffs..");
-        }
-        log_d("Start updating : %s\r\n", type.c_str());
-    });
-
-    ArduinoOTA.onEnd([]() {
-        printStatic("Uploaded");
-        log_d("End");
-        delay(2000);
-    });
-
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        String str = String(progress / (total / 100));
-
-        log_d("Progress: %s%%", str.c_str());
-        log_printf("\033[1F");
-
-        str += "%";
-        str.trim();
-
-        //printStatic(str);
-    });
-
-    ArduinoOTA.onError([](ota_error_t error) {
-        log_e("Error[%u]: ", error);
-        printStatic("Error!!!");
-
-        if (error == OTA_AUTH_ERROR)
-        {
-            log_e("Auth Failed");
-        }
-        else if (error == OTA_BEGIN_ERROR)
-        {
-            log_e("Begin Failed");
-        }
-        else if (error == OTA_CONNECT_ERROR)
-        {
-            log_e("Connect Failed");
-        }
-        else if (error == OTA_RECEIVE_ERROR)
-        {
-            log_e("Receive Failed");
-        }
-        else if (error == OTA_END_ERROR)
-        {
-            log_e("End Failed");
-        }
-    });
-
-    ArduinoOTA.setMdnsEnabled(true);
-    ArduinoOTA.setHostname(HOSTNAME);
-
-    log_d("- Hostname : %s.local", ArduinoOTA.getHostname().c_str());
-
-    ArduinoOTA.begin();
-    log_d("- OTA Started");
 }
 
 bool check_clock_enable(uint8_t start_hour, uint8_t end_hour)
@@ -678,8 +582,6 @@ void initClock()
     check_clock();
 
     checker.attach(60, check_clock);
-    //sensor_checker.attach(60 * 15, checkSensor);
-    sensor_checker.attach(60, checkSensor);
 }
 
 void printTemperature()
@@ -695,7 +597,7 @@ void printTemperature()
 
     printStatic(temperature);
 
-    delay(5000);
+    delay(3000);
 }
 
 void printPressur()
@@ -711,7 +613,7 @@ void printPressur()
 
     printStatic(pressur);
 
-    delay(5000);
+    delay(3000);
 }
 
 void printHumidity()
@@ -727,18 +629,7 @@ void printHumidity()
 
     printStatic(humidity);
 
-    delay(5000);
-}
-
-void initHttpClient()
-{
-    String json = getServerInfo(DIST_HOSTNAME, APIURI);
-    log_d("Body = %s", json.c_str());
-}
-
-void initFont()
-{
-    SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_file, Shino_Half_Font_file, dummy);
+    delay(3000);
 }
 
 void getBME280Info()
@@ -883,21 +774,140 @@ void initBLE()
     pBLEScan->start(30); //waitting to find BLE server
 }
 
+String makeCreateTime()
+{
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+
+    char buffer[128] = {0};
+    sprintf(buffer, "%04d-%02d-%02dT%02d:%02d:%02d+0900",
+            tm->tm_year + 1900,
+            tm->tm_mon + 1,
+            tm->tm_mday,
+            tm->tm_hour,
+            tm->tm_min,
+            tm->tm_sec);
+
+    String createTime(buffer);
+
+    log_i("[time] %s", createTime.c_str());
+
+    return createTime;
+}
+
+String getSensorDeviceName()
+{
+    return "BME280";
+}
+
+const char HEX_CHAR_ARRAY[17] = "0123456789ABCDEF";
+/**
+* convert char array (hex values) to readable string by seperator
+* buf:           buffer to convert
+* length:        data length
+* strSeperator   seperator between each hex value
+* return:        formated value as String
+*/
+String byteToHexString(uint8_t *buf, uint8_t length, String strSeperator = "-")
+{
+    String dataString = "";
+    for (uint8_t i = 0; i < length; i++)
+    {
+        byte v = buf[i] / 16;
+        byte w = buf[i] % 16;
+        if (i > 0)
+        {
+            dataString += strSeperator;
+        }
+        dataString += String(HEX_CHAR_ARRAY[v]);
+        dataString += String(HEX_CHAR_ARRAY[w]);
+    }
+    dataString.toUpperCase();
+    return dataString;
+} // byteToHexString
+
+String _getESP32ChipID()
+{
+    uint64_t chipid;
+    chipid = ESP.getEfuseMac(); //The chip ID is essentially its MAC address(length: 6 bytes).
+    int chipid_size = 6;
+    uint8_t chipid_arr[chipid_size];
+    for (uint8_t i = 0; i < chipid_size; i++)
+    {
+        chipid_arr[i] = (chipid >> (8 * i)) & 0xff;
+    }
+    return byteToHexString(chipid_arr, chipid_size, "");
+}
+
+void setJsonResponse(String selfApiURI, String nextApiURI, String status)
+{
+    _root["cip_id"] = _getESP32ChipID();
+    _root["created_at"] = makeCreateTime();
+
+    JsonObject _links = _root.createNestedObject("_links");
+
+    _links["self"]["href"] = selfApiURI;
+    _links["next"]["href"] = nextApiURI;
+
+    JsonObject _embedded_sensor_1 = _root["_embedded"]["sensor"].createNestedObject("1");
+    _embedded_sensor_1["temperature"] = doc["temperatur"];
+    _embedded_sensor_1["humidity"] = doc["humidity"];
+    _embedded_sensor_1["pressure"] = doc["pressur"];
+    _embedded_sensor_1["status"] = status;
+}
+
+void initWebServer()
+{
+    g_server->on(sensors_all.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+        log_d("[HTTP_GET] %s", sensors_all.c_str());
+        String response;
+        serializeJson(_root, response);
+        request->send(200, "application/json; charset=UTF-8", response);
+    });
+
+    g_server->on(sensors_temperature.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+        log_d("[HTTP_GET] %s", sensors_temperature.c_str());
+
+        request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+    });
+
+    g_server->on(sensors_humidity.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+        log_d("[HTTP_GET] %s", sensors_humidity.c_str());
+
+        request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+    });
+
+    g_server->on(sensors_pressure.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+        log_d("[HTTP_GET] %s", sensors_pressure.c_str());
+
+        request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+    });
+}
+
 void setup()
 {
-    initSerial();
-    initFont();
-    initLCDMatrix();
-    initWiFi();
+    initLEDMatrix();
+
+    blinker.attach_ms(500, connecting);
+
+    stb.setHostname(HOSTNAME);
+    stb.setTargetHostname(DIST_HOSTNAME);
+    stb.setApName(AP_NAME);
+
+    stb.begin();
+
+    blinker.detach();
+
+    printConnected();
+
     initClock();
-    initOta();
-    initHttpClient();
-    message = MESSAGE::MSG_COMMAND_BLE_INIT;
+    initWebServer();
 }
 
 void loop()
 {
-    ArduinoOTA.handle();
+
+    stb.handle();
 
     switch (message)
     {
@@ -916,7 +926,7 @@ void loop()
         break;
     case MESSAGE::MSG_COMMAND_PRESSURE:
 
-        //printPressur();
+        printPressur();
         message = MESSAGE::MSG_COMMAND_CLOCK;
         break;
     case MESSAGE::MSG_COMMAND_CLOCK:
