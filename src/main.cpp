@@ -71,7 +71,7 @@ static BLERemoteCharacteristic *pRemoteCharacteristic;
 #define G 3         //green
 
 #define CLOCK_EN_S 6  //Start AM 6:00
-#define CLOCK_EN_E 22 //End   PM10:00
+#define CLOCK_EN_E 23 //End   PM10:00
 
 const String UTF8SJIS_FILE("/Utf8Sjis.tbl");
 const String SHINO_HALF_FONT_FILE("/shnm8x16.bdf"); //半角フォントファイル名
@@ -89,7 +89,6 @@ Ticker checker;
 Ticker sensor_checker;
 
 StaticJsonDocument<384> doc;
-StaticJsonDocument<384> _root;
 
 ESP32_SPIFFS_ShinonomeFNT SFR;
 SerialTelnetBridgeClass stb;
@@ -839,29 +838,38 @@ String _getESP32ChipID()
     return byteToHexString(chipid_arr, chipid_size, "");
 }
 
-void setJsonResponse(String selfApiURI, String nextApiURI, String status)
+String makeJsonResponse(String selfApiURI, String nextApiURI, String status)
 {
-    _root["cip_id"] = _getESP32ChipID();
-    _root["created_at"] = makeCreateTime();
+    String response;
+    StaticJsonDocument<384> _local;
 
-    JsonObject _links = _root.createNestedObject("_links");
+    _local["cip_id"] = _getESP32ChipID();
+    _local["created_at"] = makeCreateTime();
+
+    JsonObject _links = _local.createNestedObject("_links");
 
     _links["self"]["href"] = selfApiURI;
     _links["next"]["href"] = nextApiURI;
 
-    JsonObject _embedded_sensor_1 = _root["_embedded"]["sensor"].createNestedObject("1");
+    JsonObject _embedded_sensor_1 = _local["_embedded"]["sensor"].createNestedObject("1");
+    _embedded_sensor_1["device_name"] = getSensorDeviceName();
     _embedded_sensor_1["temperature"] = doc["temperatur"];
     _embedded_sensor_1["humidity"] = doc["humidity"];
     _embedded_sensor_1["pressure"] = doc["pressur"];
     _embedded_sensor_1["status"] = status;
+
+    serializeJson(_local, response);
+
+    return response;
 }
 
 void initWebServer()
 {
+    makeJsonResponse("", "", "");
+
     g_server->on(sensors_all.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
         log_d("[HTTP_GET] %s", sensors_all.c_str());
-        String response;
-        serializeJson(_root, response);
+        String response = makeJsonResponse(sensors_all, sensors_temperature, "online");
         request->send(200, "application/json; charset=UTF-8", response);
     });
 
