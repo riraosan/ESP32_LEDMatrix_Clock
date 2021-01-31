@@ -29,15 +29,16 @@ inspired by:
 #include <SerialTelnetBridge.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
-#include <AsyncJson.h>
-#include <ArduinoJson.h>
-#include <Ticker.h>
-#include <BLEDevice.h>
-#include <BLEScan.h>
 #include <ESP32_SPIFFS_ShinonomeFNT.h>
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
+#include <ESPUI.h>
+#include <Ticker.h>
 
 #include <esp32-hal-log.h>
+
+#ifdef ESP32_BLE
+#include <BLEDevice.h>
+#include <BLEScan.h>
 
 // The remote service we wish to connect to.
 static BLEUUID serviceUUID("00001812-0000-1000-8000-00805f9b34fb"); //DISO AB Shutter3(red)
@@ -46,6 +47,7 @@ static BLEUUID charUUID("00002a4d-0000-1000-8000-00805f9b34fb"); //DISO AB Shutt
 
 static BLEAddress *pServerAddress;
 static BLERemoteCharacteristic *pRemoteCharacteristic;
+#endif
 
 #define HOSTNAME "esp32_clock"
 #define DIST_HOSTNAME "esp32"
@@ -93,7 +95,12 @@ StaticJsonDocument<384> doc;
 ESP32_SPIFFS_ShinonomeFNT SFR;
 SerialTelnetBridgeClass stb;
 
-AsyncWebServer *g_server = stb.getAsyncWebServerPtr();
+AsyncWebServer *g_server;
+
+uint16_t timeLabelId;
+uint16_t temperatureLabelId;
+uint16_t humidityLabelId;
+uint16_t pressurLabelId;
 
 //message ID
 enum class MESSAGE
@@ -115,6 +122,25 @@ MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
 
 static uint8_t retry = 0;   //Retry GET request
 static bool active = false; //Check clock state
+
+String makeCreateTime()
+{
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+
+    char buffer[128] = {0};
+    sprintf(buffer, "%04d-%02d-%02dT%02d:%02d:%02d+0900",
+            tm->tm_year + 1900,
+            tm->tm_mon + 1,
+            tm->tm_mday,
+            tm->tm_hour,
+            tm->tm_min,
+            tm->tm_sec);
+
+    log_i("[time] %s", String(buffer).c_str());
+
+    return String(buffer);
+}
 
 //Write setting to LED Panel
 void setRAMAdder(uint8_t lineNumber)
@@ -362,18 +388,16 @@ void setAllPortHigh()
 void PrintTime(String &str, int flag)
 {
     char tmp_str[10] = {0};
-    struct tm *tm;
-
     time_t t = time(NULL);
-    tm = localtime(&t);
+    struct tm *tm = localtime(&t);
 
     if (flag == 0)
     {
-        sprintf(tmp_str, "  %02d:%02d ", tm->tm_hour, tm->tm_min);
+        sprintf(tmp_str, "%02d:%02d:%2d", tm->tm_hour, tm->tm_min, tm->tm_sec);
     }
     else
     {
-        sprintf(tmp_str, "  %02d %02d ", tm->tm_hour, tm->tm_min);
+        sprintf(tmp_str, "%02d:%02d:%2d", tm->tm_hour, tm->tm_min, tm->tm_sec);
     }
 
     str = tmp_str;
@@ -381,15 +405,14 @@ void PrintTime(String &str, int flag)
 
 void printTimeLEDMatrix()
 {
-    uint8_t time_font_buf[8][16] = {0};
-    String str;
-
     static int flag = 0;
+    String str;
+    uint8_t time_font_buf[8][16] = {0};
+    uint8_t time_font_color[8] = {G, G, O, G, G, O, G, G};
 
     flag = ~flag;
     PrintTime(str, flag);
 
-    uint8_t time_font_color[8] = {O, O, G, G, O, G, G, O};
     uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, time_font_buf);
     printLEDMatrix(sj_length, time_font_buf, time_font_color);
 }
@@ -403,7 +426,7 @@ void connecting()
 {
     uint16_t sj_length = 0;
     uint8_t _font_buf[8][16] = {0};
-    uint8_t _font_color[8] = {O, O, O, O, O, O, O, O};
+    uint8_t _font_color[8] = {G, G, G, G, G, G, G, O};
 
     static int num = 0;
 
@@ -411,12 +434,12 @@ void connecting()
 
     if (num)
     {
-        sj_length = SFR.StrDirect_ShinoFNT_readALL("        ", _font_buf);
+        sj_length = SFR.StrDirect_ShinoFNT_readALL("connect ", _font_buf);
         printLEDMatrix(sj_length, _font_buf, _font_color);
     }
     else
     {
-        sj_length = SFR.StrDirect_ShinoFNT_readALL("       .", _font_buf);
+        sj_length = SFR.StrDirect_ShinoFNT_readALL("connect.", _font_buf);
         printLEDMatrix(sj_length, _font_buf, _font_color);
     }
 }
@@ -476,6 +499,7 @@ void initLEDMatrix()
     setAllPortOutput();
 
     digitalWrite(PORT_SE_IN, HIGH); //to change manual mode
+
     print_blank();
     print_blank();
 }
@@ -504,16 +528,22 @@ void checkSensor()
 
 void stopClock()
 {
-    clocker.detach();
-    sensor_checker.detach();
-    active = false;
+    if (active == true)
+    {
+        clocker.detach();
+        sensor_checker.detach();
+        active = false;
+    }
 }
 
 void startClock()
 {
-    clocker.attach_ms(500, blink);
-    sensor_checker.attach(60, checkSensor);
-    active = true;
+    if (active == false)
+    {
+        clocker.attach_ms(500, blink);
+        sensor_checker.attach(60, checkSensor);
+        active = true;
+    }
 }
 
 void check_clock()
@@ -544,10 +574,12 @@ String getServerInfo(String hostName, String uri)
     String jsonBody;
     HTTPClient http;
 
-    log_d("Starting connection to %s.local Web server...", hostName.c_str());
+    long oldTime = millis();
+    log_i("START getServerInfo():%dms", millis() - oldTime);
+    log_i("Starting connection to %s.local Web server...", hostName.c_str());
 
     IPAddress ip = MDNS.queryHost(hostName);
-    log_i("Hostname : %s IPaddress : %s", hostName.c_str(), ip.toString().c_str());
+    log_i("[%d]Hostname : %s IPaddress : %s", millis() - oldTime, hostName.c_str(), ip.toString().c_str());
 
     http.begin(ip.toString(), 80, uri);
     int httpCode = http.GET();
@@ -568,6 +600,8 @@ String getServerInfo(String hostName, String uri)
         http.end();
     }
 
+    log_i("END getServerInfo():%dms", millis() - oldTime);
+
     return jsonBody;
 }
 
@@ -585,50 +619,32 @@ void initClock()
 
 void printTemperature()
 {
-    String temperature;
     char buffer[10] = {0};
-
     float _temperature = doc["temperatur"]; // 21.93
+    sprintf(buffer, "T:%4.1f*C", _temperature);
+    log_i("temperature : [%s]", String(buffer));
 
-    snprintf(buffer, 9, "T:%4.1f*C", _temperature);
-    temperature = buffer;
-    log_i("temperature : [%s]", temperature.c_str());
-
-    printStatic(temperature);
-
-    delay(3000);
+    printStatic(String(buffer));
 }
 
-void printPressur()
+void printPressure()
 {
-    String pressur;
     char buffer[10] = {0};
+    float _pressure = doc["pressur"]; // 1015.944
+    sprintf(buffer, "P:%6.1f", _pressure);
+    log_i("pressure : [%s]", String(buffer).c_str());
 
-    float _pressur = doc["pressur"]; // 1015.944
-
-    snprintf(buffer, 9, "P:%6.1f", _pressur);
-    pressur = buffer;
-    log_i("pressur : [%s]", pressur.c_str());
-
-    printStatic(pressur);
-
-    delay(3000);
+    printStatic(String(buffer));
 }
 
 void printHumidity()
 {
-    String humidity;
     char buffer[10] = {0};
-
     float _humidity = doc["humidity"]; // 39.27832
+    sprintf(buffer, "H:%5.1f%%", _humidity);
+    log_i("humidity : [%s]", String(buffer).c_str());
 
-    snprintf(buffer, 9, "H:%5.1f%%", _humidity);
-    humidity = buffer;
-    log_i("humidity : [%s]", humidity.c_str());
-
-    printStatic(humidity);
-
-    delay(3000);
+    printStatic(String(buffer));
 }
 
 void getBME280Info()
@@ -659,9 +675,16 @@ void getBME280Info()
         log_d("Body = %s", json.c_str());
         deserializeJson(doc, json);
 
+        ESPUI.updateControlValue(timeLabelId, makeCreateTime());
+        ESPUI.updateControlValue(temperatureLabelId, String((float)doc["temperatur"]) + String(" °C"));
+        ESPUI.updateControlValue(humidityLabelId, String((float)doc["humidity"]) + String(" %"));
+        ESPUI.updateControlValue(pressurLabelId, String((float)doc["pressur"]) + String(" hPa"));
+
         message = MESSAGE::MSG_COMMAND_TEMPERATURE;
     }
 }
+
+#ifdef ESP32_BLE
 
 static void notifyCallback(BLERemoteCharacteristic *pBLERemoteCharacteristic, uint8_t *pData, size_t length, bool isNotify)
 {
@@ -773,25 +796,18 @@ void initBLE()
     pBLEScan->start(30); //waitting to find BLE server
 }
 
-String makeCreateTime()
+#endif
+
+void initESPUI()
 {
-    time_t t = time(NULL);
-    struct tm *tm = localtime(&t);
+    ESPUI.setVerbosity(Verbosity::VerboseJSON);
 
-    char buffer[128] = {0};
-    sprintf(buffer, "%04d-%02d-%02dT%02d:%02d:%02d+0900",
-            tm->tm_year + 1900,
-            tm->tm_mon + 1,
-            tm->tm_mday,
-            tm->tm_hour,
-            tm->tm_min,
-            tm->tm_sec);
+    timeLabelId = ESPUI.addControl(ControlType::Label, "[ Date & Time ]", "0", ControlColor::Emerald, Control::noParent);
+    temperatureLabelId = ESPUI.addControl(ControlType::Label, "[ Temperature ]", "0", ControlColor::Emerald, Control::noParent);
+    humidityLabelId = ESPUI.addControl(ControlType::Label, "[ Humidity ]", "0", ControlColor::Emerald, Control::noParent);
+    pressurLabelId = ESPUI.addControl(ControlType::Label, "[ Pressure ]", "0", ControlColor::Emerald, Control::noParent);
 
-    String createTime(buffer);
-
-    log_i("[time] %s", createTime.c_str());
-
-    return createTime;
+    ESPUI.begin("HAMADERA Weather Station");
 }
 
 String getSensorDeviceName()
@@ -835,12 +851,13 @@ String _getESP32ChipID()
     {
         chipid_arr[i] = (chipid >> (8 * i)) & 0xff;
     }
-    return byteToHexString(chipid_arr, chipid_size, "");
+    return byteToHexString(chipid_arr, chipid_size, ":");
 }
 
 String makeJsonResponse(String selfApiURI, String nextApiURI, String status)
 {
     String response;
+
     StaticJsonDocument<384> _local;
 
     _local["cip_id"] = _getESP32ChipID();
@@ -865,31 +882,36 @@ String makeJsonResponse(String selfApiURI, String nextApiURI, String status)
 
 void initWebServer()
 {
-    makeJsonResponse("", "", "");
+    g_server = stb.getAsyncWebServerPtr();
 
-    g_server->on(sensors_all.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-        log_d("[HTTP_GET] %s", sensors_all.c_str());
-        String response = makeJsonResponse(sensors_all, sensors_temperature, "online");
-        request->send(200, "application/json; charset=UTF-8", response);
-    });
+    if (g_server != nullptr)
+    {
+        makeJsonResponse("", "", "");
 
-    g_server->on(sensors_temperature.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-        log_d("[HTTP_GET] %s", sensors_temperature.c_str());
+        g_server->on(sensors_all.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+            log_d("[HTTP_GET] %s", sensors_all.c_str());
+            String response = makeJsonResponse(sensors_all, sensors_temperature, "online");
+            request->send(200, "application/json; charset=UTF-8", response);
+        });
 
-        request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-    });
+        g_server->on(sensors_temperature.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+            log_d("[HTTP_GET] %s", sensors_temperature.c_str());
 
-    g_server->on(sensors_humidity.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-        log_d("[HTTP_GET] %s", sensors_humidity.c_str());
+            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+        });
 
-        request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-    });
+        g_server->on(sensors_humidity.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+            log_d("[HTTP_GET] %s", sensors_humidity.c_str());
 
-    g_server->on(sensors_pressure.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-        log_d("[HTTP_GET] %s", sensors_pressure.c_str());
+            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+        });
 
-        request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-    });
+        g_server->on(sensors_pressure.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+            log_d("[HTTP_GET] %s", sensors_pressure.c_str());
+
+            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+        });
+    }
 }
 
 void setup()
@@ -902,19 +924,20 @@ void setup()
     stb.setTargetHostname(DIST_HOSTNAME);
     stb.setApName(AP_NAME);
 
+    initWebServer();
+
     stb.begin();
 
     blinker.detach();
 
-    printConnected();
+    //printConnected();
 
     initClock();
-    initWebServer();
+    initESPUI();
 }
 
 void loop()
 {
-
     stb.handle();
 
     switch (message)
@@ -925,16 +948,19 @@ void loop()
     case MESSAGE::MSG_COMMAND_TEMPERATURE:
 
         printTemperature();
+        delay(3000);
         message = MESSAGE::MSG_COMMAND_HUMIDITY;
         break;
     case MESSAGE::MSG_COMMAND_HUMIDITY:
 
         printHumidity();
+        delay(3000);
         message = MESSAGE::MSG_COMMAND_PRESSURE;
         break;
     case MESSAGE::MSG_COMMAND_PRESSURE:
 
-        printPressur();
+        printPressure();
+        delay(3000);
         message = MESSAGE::MSG_COMMAND_CLOCK;
         break;
     case MESSAGE::MSG_COMMAND_CLOCK:
@@ -942,6 +968,7 @@ void loop()
         startClock();
         message = MESSAGE::MSG_COMMAND_NOTHING;
         break;
+#ifdef ESP32_BLE
     case MESSAGE::MSG_COMMAND_BLE_INIT:
         initBLE();
         break;
@@ -984,6 +1011,7 @@ void loop()
         //TODO LED ON or OFF? To indicate for human.
         message = MESSAGE::MSG_COMMAND_NOTHING;
         break;
+#endif
     case MESSAGE::MSG_COMMAND_NOTHING:
     default:; //nothing
     }
