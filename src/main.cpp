@@ -73,7 +73,7 @@ static BLERemoteCharacteristic *pRemoteCharacteristic;
 #define G 3         //green
 
 #define CLOCK_EN_S 6  //Start AM 6:00
-#define CLOCK_EN_E 23 //End   PM10:00
+#define CLOCK_EN_E 23 //End   PM11:00
 
 const String UTF8SJIS_FILE("/Utf8Sjis.tbl");
 const String SHINO_HALF_FONT_FILE("/shnm8x16.bdf"); //半角フォントファイル名
@@ -86,9 +86,9 @@ const String sensors_humidity("/api/v1/devices/sensors/1/humidity");
 const String sensors_pressure("/api/v1/devices/sensors/1/pressure");
 
 Ticker clocker;
-Ticker blinker;
-Ticker checker;
-Ticker sensor_checker;
+Ticker connectBlinker;
+Ticker clockChecker;
+Ticker sensorChecker;
 
 StaticJsonDocument<384> doc;
 
@@ -106,11 +106,12 @@ uint16_t pressurLabelId;
 enum class MESSAGE
 {
     MSG_COMMAND_NOTHING,
-    MSG_COMMAND_SENSOR,
-    MSG_COMMAND_TEMPERATURE,
-    MSG_COMMAND_PRESSURE,
-    MSG_COMMAND_HUMIDITY,
-    MSG_COMMAND_CLOCK,
+    MSG_COMMAND_GET_SENSOR_DATA,
+    MSG_COMMAND_PRINT_TEMPERATURE_VALUE,
+    MSG_COMMAND_PRINT_PRESSURE_VALUE,
+    MSG_COMMAND_PRINT_HUMIDITY_VALUE,
+    MSG_COMMAND_START_CLOCK,
+    MSG_COMMAND_STOP_CLOCK,
     MSG_COMMAND_BLE_INIT,
     MSG_COMMAND_BLE_DO_CONNECT,
     MSG_COMMAND_BLE_CONNECTED,
@@ -120,8 +121,7 @@ enum class MESSAGE
 
 MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
 
-static uint8_t retry = 0;   //Retry GET request
-static bool active = false; //Check clock state
+static uint8_t retry = 0; //Retry GET request
 
 String makeCreateTime()
 {
@@ -393,11 +393,11 @@ void PrintTime(String &str, int flag)
 
     if (flag == 0)
     {
-        sprintf(tmp_str, "%02d:%02d:%2d", tm->tm_hour, tm->tm_min, tm->tm_sec);
+        sprintf(tmp_str, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
     }
     else
     {
-        sprintf(tmp_str, "%02d:%02d:%2d", tm->tm_hour, tm->tm_min, tm->tm_sec);
+        sprintf(tmp_str, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
     }
 
     str = tmp_str;
@@ -434,12 +434,12 @@ void connecting()
 
     if (num)
     {
-        sj_length = SFR.StrDirect_ShinoFNT_readALL("connect ", _font_buf);
+        sj_length = SFR.StrDirect_ShinoFNT_readALL("init   .", _font_buf);
         printLEDMatrix(sj_length, _font_buf, _font_color);
     }
     else
     {
-        sj_length = SFR.StrDirect_ShinoFNT_readALL("connect.", _font_buf);
+        sj_length = SFR.StrDirect_ShinoFNT_readALL("init    ", _font_buf);
         printLEDMatrix(sj_length, _font_buf, _font_color);
     }
 }
@@ -523,59 +523,38 @@ bool check_clock_enable(uint8_t start_hour, uint8_t end_hour)
 
 void checkSensor()
 {
-    message = MESSAGE::MSG_COMMAND_SENSOR;
+    message = MESSAGE::MSG_COMMAND_GET_SENSOR_DATA;
 }
 
 void stopClock()
 {
-    if (active == true)
-    {
-        clocker.detach();
-        sensor_checker.detach();
-        active = false;
-    }
+    clocker.detach();
 }
 
 void startClock()
 {
-    if (active == false)
-    {
-        clocker.attach_ms(500, blink);
-        sensor_checker.attach(60, checkSensor);
-        active = true;
-    }
+    clocker.attach_ms(500, blink);
 }
 
 void check_clock()
 {
-    bool IsClock = check_clock_enable(CLOCK_EN_S, CLOCK_EN_E);
-
-    if (IsClock == true)
+    if (true == check_clock_enable(CLOCK_EN_S, CLOCK_EN_E))
     {
-        if (active == false)
-        {
-            startClock();
-            active = true;
-        }
+        message = MESSAGE::MSG_COMMAND_STOP_CLOCK;
     }
     else
     {
-        if (active == true)
-        {
-            stopClock();
-            clearLEDMatrix();
-            active = false;
-        }
+        stopClock();
     }
 }
 
-String getServerInfo(String hostName, String uri)
+String getSensorInfo(String hostName, String uri)
 {
     String jsonBody;
     HTTPClient http;
 
     long oldTime = millis();
-    log_i("START getServerInfo():%dms", millis() - oldTime);
+    log_i("START getSensorInfo():%dms", millis() - oldTime);
     log_i("Starting connection to %s.local Web server...", hostName.c_str());
 
     IPAddress ip = MDNS.queryHost(hostName);
@@ -600,21 +579,46 @@ String getServerInfo(String hostName, String uri)
         http.end();
     }
 
-    log_i("END getServerInfo():%dms", millis() - oldTime);
+    log_i("END getSensorInfo():%dms", millis() - oldTime);
 
     return jsonBody;
+}
+
+bool WaitSeconds(int second)
+{
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+
+    if (tm->tm_sec == second)
+    {
+        return false;
+    }
+
+    return true;
 }
 
 void initClock()
 {
     //Get NTP Time
     configTzTime("JST-9", "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
-
     delay(2000);
 
-    check_clock();
+    while (WaitSeconds(0))
+    {
+        delay(100);
+        yield();
+    }
 
-    checker.attach(60, check_clock);
+    check_clock();
+    clockChecker.attach(60, check_clock);
+
+    while (WaitSeconds(30))
+    {
+        delay(100);
+        yield();
+    }
+
+    sensorChecker.attach(60, checkSensor);
 }
 
 void printTemperature()
@@ -649,7 +653,7 @@ void printHumidity()
 
 void getBME280Info()
 {
-    String json = getServerInfo(DIST_HOSTNAME, APIURI);
+    String json = getSensorInfo(DIST_HOSTNAME, APIURI);
     if (json.isEmpty())
     {
         if (retry < 2)
@@ -662,15 +666,12 @@ void getBME280Info()
         else
         {
             retry = 0;
-            message = MESSAGE::MSG_COMMAND_NOTHING;
             return;
         }
     }
     else
     {
         retry = 0;
-
-        stopClock();
 
         log_d("Body = %s", json.c_str());
         deserializeJson(doc, json);
@@ -679,8 +680,6 @@ void getBME280Info()
         ESPUI.updateControlValue(temperatureLabelId, String((float)doc["temperatur"]) + String(" °C"));
         ESPUI.updateControlValue(humidityLabelId, String((float)doc["humidity"]) + String(" %"));
         ESPUI.updateControlValue(pressurLabelId, String((float)doc["pressur"]) + String(" hPa"));
-
-        message = MESSAGE::MSG_COMMAND_TEMPERATURE;
     }
 }
 
@@ -918,7 +917,7 @@ void setup()
 {
     initLEDMatrix();
 
-    blinker.attach_ms(500, connecting);
+    connectBlinker.attach_ms(500, connecting);
 
     stb.setHostname(HOSTNAME);
     stb.setTargetHostname(DIST_HOSTNAME);
@@ -927,13 +926,10 @@ void setup()
     initWebServer();
 
     stb.begin();
-
-    blinker.detach();
-
-    //printConnected();
-
     initClock();
     initESPUI();
+
+    connectBlinker.detach();
 }
 
 void loop()
@@ -942,31 +938,38 @@ void loop()
 
     switch (message)
     {
-    case MESSAGE::MSG_COMMAND_SENSOR:
+    case MESSAGE::MSG_COMMAND_GET_SENSOR_DATA:
+
         getBME280Info();
+        message = MESSAGE::MSG_COMMAND_NOTHING;
         break;
-    case MESSAGE::MSG_COMMAND_TEMPERATURE:
+    case MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE:
 
         printTemperature();
         delay(3000);
-        message = MESSAGE::MSG_COMMAND_HUMIDITY;
+        message = MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE;
         break;
-    case MESSAGE::MSG_COMMAND_HUMIDITY:
+    case MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE:
 
         printHumidity();
         delay(3000);
-        message = MESSAGE::MSG_COMMAND_PRESSURE;
+        message = MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE;
         break;
-    case MESSAGE::MSG_COMMAND_PRESSURE:
+    case MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE:
 
         printPressure();
         delay(3000);
-        message = MESSAGE::MSG_COMMAND_CLOCK;
+        message = MESSAGE::MSG_COMMAND_START_CLOCK;
         break;
-    case MESSAGE::MSG_COMMAND_CLOCK:
+    case MESSAGE::MSG_COMMAND_START_CLOCK:
 
         startClock();
         message = MESSAGE::MSG_COMMAND_NOTHING;
+        break;
+    case MESSAGE::MSG_COMMAND_STOP_CLOCK:
+
+        stopClock();
+        message = MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE;
         break;
 #ifdef ESP32_BLE
     case MESSAGE::MSG_COMMAND_BLE_INIT:
