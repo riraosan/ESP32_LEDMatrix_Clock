@@ -494,8 +494,6 @@ void initFont()
 
 void initLEDMatrix()
 {
-    initFont();
-
     setAllPortOutput();
 
     digitalWrite(PORT_SE_IN, HIGH); //to change manual mode
@@ -544,6 +542,7 @@ void check_clock()
     }
     else
     {
+        initLEDMatrix();
         stopClock();
     }
 }
@@ -801,6 +800,7 @@ void initWebServer()
 
 void setup()
 {
+    initFont();
     initLEDMatrix();
 
     connectBlinker.attach_ms(500, connecting);
