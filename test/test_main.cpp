@@ -427,3 +427,116 @@ void setup()
 void loop()
 {
 }
+
+
+#ifdef ESP32_BLE
+
+static void notifyCallback(BLERemoteCharacteristic *pBLERemoteCharacteristic, uint8_t *pData, size_t length, bool isNotify)
+{
+    log_i("Notify callback for characteristic %s of data length %d", pBLERemoteCharacteristic->getUUID().toString().c_str(), length);
+}
+
+class MyClientCallback : public BLEClientCallbacks
+{
+    void onConnect(BLEClient *pclient)
+    {
+        log_i("onConnect");
+        message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
+    }
+
+    void onDisconnect(BLEClient *pclient)
+    {
+        log_i("onDisconnect");
+        message = MESSAGE::MSG_COMMAND_BLE_DISCONNECTED;
+    }
+};
+
+bool connectToServer(BLEAddress pAddress)
+{
+    log_i("Forming a connection to %s", pAddress.toString().c_str());
+
+    BLEClient *pClient = BLEDevice::createClient();
+    log_i(" - Created client");
+
+    pClient->setClientCallbacks(new MyClientCallback());
+
+    // Connect to the remove BLE Server.
+    pClient->connect(pAddress);
+    log_i(" - Connected to server");
+
+    // Obtain a reference to the service we are after in the remote BLE server.
+    BLERemoteService *pRemoteService = pClient->getService(serviceUUID);
+    if (pRemoteService == nullptr)
+    {
+        log_i("Failed to find our service UUID: %s", serviceUUID.toString().c_str());
+        return false;
+    }
+    log_i(" - Found our service");
+
+    // Obtain a reference to the characteristic in the service of the remote BLE server.
+    pRemoteCharacteristic = pRemoteService->getCharacteristic(charUUID);
+    if (pRemoteCharacteristic == nullptr)
+    {
+        log_i("Failed to find our characteristic UUID: %s", charUUID.toString().c_str());
+        return false;
+    }
+
+    log_i(" - Found our characteristic");
+
+    // Read the value of the characteristic.
+    std::string value = pRemoteCharacteristic->readValue();
+    log_i("The characteristic value was: %s", value.c_str());
+
+    pRemoteCharacteristic->registerForNotify(notifyCallback);
+
+    return true;
+}
+
+// Scan for BLE servers and find the first one that advertises the service we are looking for.
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
+{
+
+    // Called for each advertising BLE server.
+    void onResult(BLEAdvertisedDevice advertisedDevice)
+    {
+        log_i("BLE Advertised Device found: %s", advertisedDevice.toString().c_str());
+
+        // We have found a device, let us now see if it contains the service we are looking for.
+        if (advertisedDevice.haveServiceUUID() && advertisedDevice.getServiceUUID().equals(serviceUUID))
+        {
+            log_i("Found our device!  address: %s", advertisedDevice.getAddress().toString().c_str());
+            advertisedDevice.getScan()->stop();
+
+            pServerAddress = new BLEAddress(advertisedDevice.getAddress());
+            message = MESSAGE::MSG_COMMAND_BLE_DO_CONNECT;
+
+        } // Found our server
+        else
+        {
+            message = MESSAGE::MSG_COMMAND_BLE_NOT_FOUND;
+        } // Not found our server
+    }     // onResult
+};        // MyAdvertisedDeviceCallbacks
+
+static MyAdvertisedDeviceCallbacks *pAdvertisedDeviceCallback;
+
+void initBLE()
+{
+    log_i("Starting Arduino BLE Client application...");
+
+    BLEDevice::deinit();
+
+    BLEDevice::init("");
+    // Retrieve a Scanner and set the callback we want to use to be informed when we
+    // have detected a new device.  Specify that we want active scanning and start the
+    // scan to run for 30 seconds.
+    BLEScan *pBLEScan = BLEDevice::getScan();
+    pAdvertisedDeviceCallback = new MyAdvertisedDeviceCallbacks();
+
+    pBLEScan->setAdvertisedDeviceCallbacks(pAdvertisedDeviceCallback);
+    pBLEScan->setActiveScan(true);
+    pBLEScan->start(30); //waitting to find BLE server
+}
+
+#endif
+
