@@ -36,19 +36,6 @@ inspired by:
 
 #include <esp32-hal-log.h>
 
-#ifdef ESP32_BLE
-#include <BLEDevice.h>
-#include <BLEScan.h>
-
-// The remote service we wish to connect to.
-static BLEUUID serviceUUID("00001812-0000-1000-8000-00805f9b34fb"); //DISO AB Shutter3(red)
-// The characteristic of the remote service we are interested in.
-static BLEUUID charUUID("00002a4d-0000-1000-8000-00805f9b34fb"); //DISO AB Shutter3(red)
-
-static BLEAddress *pServerAddress;
-static BLERemoteCharacteristic *pRemoteCharacteristic;
-#endif
-
 #define HOSTNAME "esp32_clock"
 #define DIST_HOSTNAME "esp32"
 #define AP_NAME "ESP32-G-AP"
