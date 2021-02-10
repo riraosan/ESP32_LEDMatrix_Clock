@@ -64,7 +64,7 @@ inspired by:
 
 const String UTF8SJIS_FILE("/Utf8Sjis.tbl");
 const String SHINO_HALF_FONT_FILE("/shnm8x16.bdf"); //半角フォントファイル名
-const String DUMMY("/");
+const String DUMMY("");
 const String APIURI("/esp/sensor/all");
 
 const String sensors_all("/api/v1/devices/sensors/1/all");
@@ -481,6 +481,8 @@ void initFont()
 
 void initLEDMatrix()
 {
+    initFont();
+
     setAllPortOutput();
 
     digitalWrite(PORT_SE_IN, HIGH); //to change manual mode
@@ -640,7 +642,7 @@ void printHumidity()
 void getBME280Info()
 {
     String json = getSensorInfo(DIST_HOSTNAME, APIURI);
-    if (json.isEmpty())
+    if (json == "")
     {
         if (retry < 2)
         {
@@ -787,10 +789,9 @@ void initWebServer()
 
 void setup()
 {
-    initFont();
-    initLEDMatrix();
-
     connectBlinker.attach_ms(500, connecting);
+
+    initLEDMatrix();
 
     stb.setHostname(HOSTNAME);
     stb.setTargetHostname(DIST_HOSTNAME);
