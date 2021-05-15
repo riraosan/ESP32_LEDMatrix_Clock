@@ -681,6 +681,8 @@ void initESPUI()
     pressurLabelId = ESPUI.addControl(ControlType::Label, "[ Pressure ]", "0", ControlColor::Emerald, Control::noParent);
 
     ESPUI.begin("HAMADERA Weather Station");
+
+    getBME280Info();
 }
 
 String getSensorDeviceName()
@@ -796,10 +798,10 @@ void setup()
     stb.setHostname(HOSTNAME);
     stb.setTargetHostname(DIST_HOSTNAME);
     stb.setApName(AP_NAME);
+    stb.begin();
 
     initWebServer();
 
-    stb.begin();
     initClock();
     initESPUI();
 
