@@ -53,6 +53,7 @@ inspired by:
 #define PORT_WE_IN 17
 #define PORT_DR_IN 16
 #define PORT_ALE_IN 22
+#define PORT_LAMP 5
 
 #define PANEL_NUM 2 //LED Panel
 #define R 1         //red
@@ -340,6 +341,7 @@ void setAllPortOutput()
     pinMode(PORT_WE_IN, OUTPUT);
     pinMode(PORT_DR_IN, OUTPUT);
     pinMode(PORT_ALE_IN, OUTPUT);
+    pinMode(PORT_LAMP, OUTPUT);
 }
 
 void setAllPortLow()
@@ -355,21 +357,7 @@ void setAllPortLow()
     digitalWrite(PORT_WE_IN, LOW);
     digitalWrite(PORT_DR_IN, LOW);
     digitalWrite(PORT_ALE_IN, LOW);
-}
-
-void setAllPortHigh()
-{
-    digitalWrite(PORT_SE_IN, HIGH);
-    digitalWrite(PORT_AB_IN, HIGH);
-    digitalWrite(PORT_A3_IN, HIGH);
-    digitalWrite(PORT_A2_IN, HIGH);
-    digitalWrite(PORT_A1_IN, HIGH);
-    digitalWrite(PORT_A0_IN, HIGH);
-    digitalWrite(PORT_DG_IN, HIGH);
-    digitalWrite(PORT_CLK_IN, HIGH);
-    digitalWrite(PORT_WE_IN, HIGH);
-    digitalWrite(PORT_DR_IN, HIGH);
-    digitalWrite(PORT_ALE_IN, HIGH);
+    digitalWrite(PORT_LAMP, LOW);
 }
 
 void PrintTime(String &str, int flag)
@@ -484,6 +472,7 @@ void initLEDMatrix()
     initFont();
 
     setAllPortOutput();
+    setAllPortLow();
 
     digitalWrite(PORT_SE_IN, HIGH); //to change manual mode
 
@@ -525,14 +514,15 @@ void startClock()
 
 void check_clock()
 {
-    if (true == check_clock_enable(CLOCK_EN_S, CLOCK_EN_E))
+    if (check_clock_enable(CLOCK_EN_S, CLOCK_EN_E))
     {
-        message = MESSAGE::MSG_COMMAND_STOP_CLOCK;
+        message = MESSAGE::MSG_COMMAND_START_CLOCK;
     }
     else
     {
         initLEDMatrix();
         stopClock();
+        digitalWrite(PORT_LAMP, LOW);
     }
 }
 
@@ -606,7 +596,7 @@ void initClock()
         yield();
     }
 
-    sensorChecker.attach(60, checkSensor);
+    //sensorChecker.attach(60, checkSensor);
 }
 
 void printTemperature()
@@ -671,18 +661,34 @@ void getBME280Info()
     }
 }
 
+void selectHour(Control *sender, int value)
+{
+    log_d("Select: ID: %d, Value: %d", sender->id, sender->value);
+}
+
+void selectMinuit(Control *sender, int value)
+{
+    log_d("Select: ID: %d, Value: %d", sender->id, sender->value);
+}
+
 void initESPUI()
 {
-    ESPUI.setVerbosity(Verbosity::VerboseJSON);
+    ESPUI.setVerbosity(Verbosity::Quiet);
 
-    timeLabelId = ESPUI.addControl(ControlType::Label, "[ Date & Time ]", "0", ControlColor::Emerald, Control::noParent);
-    temperatureLabelId = ESPUI.addControl(ControlType::Label, "[ Temperature ]", "0", ControlColor::Emerald, Control::noParent);
-    humidityLabelId = ESPUI.addControl(ControlType::Label, "[ Humidity ]", "0", ControlColor::Emerald, Control::noParent);
-    pressurLabelId = ESPUI.addControl(ControlType::Label, "[ Pressure ]", "0", ControlColor::Emerald, Control::noParent);
+    uint16_t hour = ESPUI.addControl(ControlType::Select, "Hour", "", ControlColor::Alizarin, Control::noParent, &selectHour);
+    ESPUI.addControl(ControlType::Option, "6 am", "6", ControlColor::Alizarin, hour);
+    ESPUI.addControl(ControlType::Option, "7 am", "7", ControlColor::Alizarin, hour);
+    ESPUI.addControl(ControlType::Option, "8 am", "8", ControlColor::Alizarin, hour);
 
-    ESPUI.begin("HAMADERA Weather Station");
+    uint16_t minuit = ESPUI.addControl(ControlType::Select, "Minuit", "", ControlColor::Alizarin, Control::noParent, &selectMinuit);
+    ESPUI.addControl(ControlType::Option, "0", "0", ControlColor::Alizarin, minuit);
+    ESPUI.addControl(ControlType::Option, "10", "10", ControlColor::Alizarin, minuit);
+    ESPUI.addControl(ControlType::Option, "20", "20", ControlColor::Alizarin, minuit);
+    ESPUI.addControl(ControlType::Option, "30", "30", ControlColor::Alizarin, minuit);
+    ESPUI.addControl(ControlType::Option, "40", "40", ControlColor::Alizarin, minuit);
+    ESPUI.addControl(ControlType::Option, "50", "50", ControlColor::Alizarin, minuit);
 
-    getBME280Info();
+    ESPUI.begin("LAMP Alarm Clock Setting");
 }
 
 String getSensorDeviceName()
@@ -757,142 +763,148 @@ String makeJsonResponse(String selfApiURI, String nextApiURI, String status)
 
 void initWebServer()
 {
-    g_server = stb.getAsyncWebServerPtr();
+    //g_server = stb.getAsyncWebServerPtr();
 
     if (g_server != nullptr)
     {
         makeJsonResponse("", "", "");
 
-        g_server->on(sensors_all.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-            log_d("[HTTP_GET] %s", sensors_all.c_str());
-            String response = makeJsonResponse(sensors_all, sensors_temperature, "online");
-            request->send(200, "application/json; charset=UTF-8", response);
-        });
+        g_server->on(sensors_all.c_str(), HTTP_GET, [](AsyncWebServerRequest *request)
+                     {
+                         log_d("[HTTP_GET] %s", sensors_all.c_str());
+                         String response = makeJsonResponse(sensors_all, sensors_temperature, "online");
+                         request->send(200, "application/json; charset=UTF-8", response);
+                     });
 
-        g_server->on(sensors_temperature.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-            log_d("[HTTP_GET] %s", sensors_temperature.c_str());
+        g_server->on(sensors_temperature.c_str(), HTTP_GET, [](AsyncWebServerRequest *request)
+                     {
+                         log_d("[HTTP_GET] %s", sensors_temperature.c_str());
 
-            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-        });
+                         request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+                     });
 
-        g_server->on(sensors_humidity.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-            log_d("[HTTP_GET] %s", sensors_humidity.c_str());
+        g_server->on(sensors_humidity.c_str(), HTTP_GET, [](AsyncWebServerRequest *request)
+                     {
+                         log_d("[HTTP_GET] %s", sensors_humidity.c_str());
 
-            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-        });
+                         request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+                     });
 
-        g_server->on(sensors_pressure.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-            log_d("[HTTP_GET] %s", sensors_pressure.c_str());
+        g_server->on(sensors_pressure.c_str(), HTTP_GET, [](AsyncWebServerRequest *request)
+                     {
+                         log_d("[HTTP_GET] %s", sensors_pressure.c_str());
 
-            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-        });
+                         request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
+                     });
     }
 }
 
 void setup()
 {
-    connectBlinker.attach_ms(500, connecting);
-
     initLEDMatrix();
+
+    connectBlinker.attach_ms(500, connecting);
 
     stb.setHostname(HOSTNAME);
     stb.setTargetHostname(DIST_HOSTNAME);
     stb.setApName(AP_NAME);
-    stb.begin();
-
-    initWebServer();
+    stb.begin(false, false);
 
     initClock();
     initESPUI();
 
     connectBlinker.detach();
+
+    print_blank();
+    print_blank();
 }
 
 void loop()
 {
-    stb.handle();
-
-    switch (message)
+    if (stb.handle() == false)
     {
-    case MESSAGE::MSG_COMMAND_GET_SENSOR_DATA:
+        switch (message)
+        {
+        case MESSAGE::MSG_COMMAND_GET_SENSOR_DATA:
 
-        getBME280Info();
-        message = MESSAGE::MSG_COMMAND_NOTHING;
-        break;
-    case MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE:
+            getBME280Info();
+            message = MESSAGE::MSG_COMMAND_NOTHING;
+            break;
+        case MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE:
 
-        printTemperature();
-        delay(3000);
-        message = MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE;
-        break;
-    case MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE:
+            printTemperature();
+            delay(3000);
+            message = MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE;
+            break;
+        case MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE:
 
-        printHumidity();
-        delay(3000);
-        message = MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE;
-        break;
-    case MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE:
+            printHumidity();
+            delay(3000);
+            message = MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE;
+            break;
+        case MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE:
 
-        printPressure();
-        delay(3000);
-        message = MESSAGE::MSG_COMMAND_START_CLOCK;
-        break;
-    case MESSAGE::MSG_COMMAND_START_CLOCK:
+            printPressure();
+            delay(3000);
+            message = MESSAGE::MSG_COMMAND_START_CLOCK;
+            break;
+        case MESSAGE::MSG_COMMAND_START_CLOCK:
+            digitalWrite(PORT_LAMP, HIGH);
+            startClock();
+            message = MESSAGE::MSG_COMMAND_NOTHING;
+            break;
+        case MESSAGE::MSG_COMMAND_STOP_CLOCK:
 
-        startClock();
-        message = MESSAGE::MSG_COMMAND_NOTHING;
-        break;
-    case MESSAGE::MSG_COMMAND_STOP_CLOCK:
-
-        stopClock();
-        message = MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE;
-        break;
+            stopClock();
+            message = MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE;
+            break;
 #ifdef ESP32_BLE
-    case MESSAGE::MSG_COMMAND_BLE_INIT:
-        initBLE();
-        break;
-    case MESSAGE::MSG_COMMAND_BLE_DO_CONNECT:
-        log_i("We wish to connect BLE Server. pServerAddress = 0x%x", pServerAddress);
-        // We have scanned for and found the desired BLE Server with which we wish to connect.
-        // Now we connect to it. Once we are connected we set "MSG_COMMAND_BLE_CONNECTED"
-        if (connectToServer(*pServerAddress))
-        {
-            log_i("We are now connected to the BLE Server");
-            message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
-        }
-        else
-        {
-            log_i("We have failed to connect to the server; there is nothing more we will do.");
-            message = MESSAGE::MSG_COMMAND_BLE_DISCONNECTED;
-        }
-        break;
-    case MESSAGE::MSG_COMMAND_BLE_CONNECTED:
-        log_i("We are connected to a peer BLE Server");
-        // If we are connected to a peer BLE Server, update the characteristic each time we are reached
-        // with the current time since boot.
+        case MESSAGE::MSG_COMMAND_BLE_INIT:
+            initBLE();
+            break;
+        case MESSAGE::MSG_COMMAND_BLE_DO_CONNECT:
+            log_i("We wish to connect BLE Server. pServerAddress = 0x%x", pServerAddress);
+            // We have scanned for and found the desired BLE Server with which we wish to connect.
+            // Now we connect to it. Once we are connected we set "MSG_COMMAND_BLE_CONNECTED"
+            if (connectToServer(*pServerAddress))
+            {
+                log_i("We are now connected to the BLE Server");
+                message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
+            }
+            else
+            {
+                log_i("We have failed to connect to the server; there is nothing more we will do.");
+                message = MESSAGE::MSG_COMMAND_BLE_DISCONNECTED;
+            }
+            break;
+        case MESSAGE::MSG_COMMAND_BLE_CONNECTED:
+            log_i("We are connected to a peer BLE Server");
+            // If we are connected to a peer BLE Server, update the characteristic each time we are reached
+            // with the current time since boot.
 
-        //String newValue = "Time since boot: " + String(millis() / 1000);
-        //log_i("Setting new characteristic value to \"%s\"", newValue.c_str());
+            //String newValue = "Time since boot: " + String(millis() / 1000);
+            //log_i("Setting new characteristic value to \"%s\"", newValue.c_str());
 
-        // Set the characteristic's value to be the array of bytes that is actually a string.
-        //pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
-        message = MESSAGE::MSG_COMMAND_NOTHING;
-        break;
-    case MESSAGE::MSG_COMMAND_BLE_DISCONNECTED:
-        log_i("Disconnected our service");
+            // Set the characteristic's value to be the array of bytes that is actually a string.
+            //pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
+            message = MESSAGE::MSG_COMMAND_NOTHING;
+            break;
+        case MESSAGE::MSG_COMMAND_BLE_DISCONNECTED:
+            log_i("Disconnected our service");
 
-        //TODO LED ON or OFF? To indicate for human.
-        message = MESSAGE::MSG_COMMAND_BLE_INIT;
-        break;
-    case MESSAGE::MSG_COMMAND_BLE_NOT_FOUND:
-        log_i("Not found our service");
+            //TODO LED ON or OFF? To indicate for human.
+            message = MESSAGE::MSG_COMMAND_BLE_INIT;
+            break;
+        case MESSAGE::MSG_COMMAND_BLE_NOT_FOUND:
+            log_i("Not found our service");
 
-        //TODO LED ON or OFF? To indicate for human.
-        message = MESSAGE::MSG_COMMAND_NOTHING;
-        break;
+            //TODO LED ON or OFF? To indicate for human.
+            message = MESSAGE::MSG_COMMAND_NOTHING;
+            break;
 #endif
-    case MESSAGE::MSG_COMMAND_NOTHING:
-    default:; //nothing
+        case MESSAGE::MSG_COMMAND_NOTHING:
+        default:; //nothing
+        }
     }
 
     yield();
