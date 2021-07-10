@@ -1,7 +1,7 @@
 /*
 The MIT License (MIT)
 
-Copyright (c) 2020-2021 riraotech.com
+Copyright (c) 2020-2021 riraosan.github.io
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,43 +21,23 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-inspired by:
-
 */
 
+#define TS_ENABLE_SSL  // Don't forget it for ThingSpeak.h!!
 #include <Arduino.h>
+#include <AutoConnect.h>
 #include <ESP32_SPIFFS_ShinonomeFNT.h>
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
 #include <ESPUI.h>
-#include <ESPmDNS.h>
-#include <HTTPClient.h>
-#include <SerialTelnetBridge.h>
+#include <ThingSpeak.h>
 #include <Ticker.h>
 #include <esp32-hal-log.h>
+#include <ledmatrix.h>
+#include <secrets.h>
+#include <timezone.h>
 
 #define HOSTNAME      "esp32_clock"
-#define DIST_HOSTNAME "esp32"
-#define AP_NAME       "ESP32-G-AP"
 #define MSG_CONNECTED "        WiFi Started."
-
-//LED port settings
-#define PORT_SE_IN    13
-#define PORT_AB_IN    27
-#define PORT_A3_IN    23
-#define PORT_A2_IN    21
-#define PORT_A1_IN    25
-#define PORT_A0_IN    26
-#define PORT_DG_IN    19
-#define PORT_CLK_IN   18
-#define PORT_WE_IN    17
-#define PORT_DR_IN    16
-#define PORT_ALE_IN   22
-#define PORT_LAMP     5
-
-#define PANEL_NUM     2  //LED Panel
-#define R             1  //red
-#define O             2  //orange
-#define G             3  //green
 
 #define CLOCK_EN_S    6   //Start AM 6:00
 #define CLOCK_EN_E    23  //End   PM11:00
@@ -80,7 +60,6 @@ Ticker sensorChecker;
 StaticJsonDocument<384> doc;
 
 ESP32_SPIFFS_ShinonomeFNT SFR;
-SerialTelnetBridgeClass stb;
 
 AsyncWebServer *g_server;
 
@@ -107,8 +86,6 @@ enum class MESSAGE {
 
 MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
 
-static uint8_t retry = 0;  //Retry GET request
-
 String makeCreateTime() {
     time_t t      = time(NULL);
     struct tm *tm = localtime(&t);
@@ -125,197 +102,6 @@ String makeCreateTime() {
     log_i("[time] %s", String(buffer).c_str());
 
     return String(buffer);
-}
-
-//Write setting to LED Panel
-void setRAMAdder(uint8_t lineNumber) {
-    uint8_t A[4]  = {0};
-    uint8_t adder = 0;
-
-    adder = lineNumber;
-
-    for (int i = 0; i < 4; i++) {
-        A[i] = adder % 2;
-        adder /= 2;
-    }
-
-    digitalWrite(PORT_A0_IN, A[0]);
-    digitalWrite(PORT_A1_IN, A[1]);
-    digitalWrite(PORT_A2_IN, A[2]);
-    digitalWrite(PORT_A3_IN, A[3]);
-}
-
-void send_line_data(uint8_t iram_adder, uint8_t ifont_data[], uint8_t color_data[]) {
-    uint8_t font[8]  = {0};
-    uint8_t tmp_data = 0;
-    int k            = 0;
-    for (int j = 0; j < 4 * PANEL_NUM; j++) {
-        tmp_data = ifont_data[j];
-        for (int i = 0; i < 8; i++) {
-            font[i] = tmp_data % 2;
-            tmp_data /= 2;
-        }
-
-        for (int i = 7; i >= 0; i--) {
-            digitalWrite(PORT_DG_IN, LOW);
-            digitalWrite(PORT_DR_IN, LOW);
-            digitalWrite(PORT_CLK_IN, LOW);
-
-            if (font[i] == 1) {
-                if (color_data[k] == R) {
-                    digitalWrite(PORT_DR_IN, HIGH);
-                }
-
-                if (color_data[k] == G) {
-                    digitalWrite(PORT_DG_IN, HIGH);
-                }
-
-                if (color_data[k] == O) {
-                    digitalWrite(PORT_DR_IN, HIGH);
-                    digitalWrite(PORT_DG_IN, HIGH);
-                }
-            } else {
-                digitalWrite(PORT_DR_IN, LOW);
-                digitalWrite(PORT_DG_IN, LOW);
-            }
-
-            delayMicroseconds(1);
-            digitalWrite(PORT_CLK_IN, HIGH);
-            delayMicroseconds(1);
-
-            k++;
-        }
-    }
-    //アドレスをポートに入力
-    setRAMAdder(iram_adder);
-    //ALE　Highでアドレスセット
-    digitalWrite(PORT_ALE_IN, HIGH);
-    //WE Highでデータを書き込み
-    digitalWrite(PORT_WE_IN, HIGH);
-    //WE Lowをセット
-    digitalWrite(PORT_WE_IN, LOW);
-    //ALE Lowをセット
-    digitalWrite(PORT_ALE_IN, LOW);
-}
-
-void shift_bit_left(uint8_t dist[], uint8_t src[], int len, int n) {
-    uint8_t mask = 0xFF << (8 - n);
-    for (int i = 0; i < len; i++) {
-        if (i < len - 1) {
-            dist[i] = (src[i] << n) | ((src[i + 1] & mask) >> (8 - n));
-        } else {
-            dist[i] = src[i] << n;
-        }
-    }
-}
-
-void shift_color_left(uint8_t dist[], uint8_t src[], int len) {
-    for (int i = 0; i < len * 8; i++) {
-        if (i < len * 8 - 1) {
-            dist[i] = src[i + 1];
-        } else {
-            dist[i] = 0;
-        }
-    }
-}
-////////////////////////////////////////////////////////////////////
-void scrollLEDMatrix(int16_t sj_length, uint8_t font_data[][16], uint8_t color_data[], uint16_t intervals) {
-    uint8_t src_line_data[sj_length]      = {0};
-    uint8_t dist_line_data[sj_length]     = {0};
-    uint8_t tmp_color_data[sj_length * 8] = {0};
-    uint8_t tmp_font_data[sj_length][16]  = {0};
-    uint8_t ram                           = LOW;
-
-    int n = 0;
-    for (int i = 0; i < sj_length; i++) {
-        for (int j = 0; j < 8; j++) {
-            tmp_color_data[n++] = color_data[i];
-        }
-
-        for (int j = 0; j < 16; j++) {
-            tmp_font_data[i][j] = font_data[i][j];
-        }
-    }
-
-    for (int k = 0; k < sj_length * 8 + 2; k++) {
-        ram = ~ram;
-        digitalWrite(PORT_AB_IN, ram);  //write to RAM-A/RAM-B
-        for (int i = 0; i < 16; i++) {
-            for (int j = 0; j < sj_length; j++) {
-                src_line_data[j] = tmp_font_data[j][i];
-            }
-
-            send_line_data(i, src_line_data, tmp_color_data);
-            shift_bit_left(dist_line_data, src_line_data, sj_length, 1);
-
-            for (int j = 0; j < sj_length; j++) {
-                tmp_font_data[j][i] = dist_line_data[j];
-            }
-        }
-        shift_color_left(tmp_color_data, tmp_color_data, sj_length);
-        delay(intervals);
-    }
-}
-
-//Print static
-void printLEDMatrix(uint16_t sj_length, uint8_t font_data[][16], uint8_t color_data[]) {
-    uint8_t src_line_data[sj_length]      = {0};
-    uint8_t tmp_color_data[sj_length * 8] = {0};
-    uint8_t tmp_font_data[sj_length][16]  = {0};
-    uint8_t ram                           = LOW;
-
-    int n = 0;
-    for (int i = 0; i < sj_length; i++) {
-        for (int j = 0; j < 8; j++) {
-            tmp_color_data[n++] = color_data[i];
-        }
-
-        for (int j = 0; j < 16; j++) {
-            tmp_font_data[i][j] = font_data[i][j];
-        }
-    }
-
-    for (int k = 0; k < sj_length * 8 + 2; k++) {
-        digitalWrite(PORT_AB_IN, ram);  //write to RAM-A/RAM-B
-        for (int i = 0; i < 16; i++) {
-            for (int j = 0; j < sj_length; j++) {
-                src_line_data[j] = tmp_font_data[j][i];
-            }
-
-            send_line_data(i, src_line_data, tmp_color_data);
-        }
-        ram = ~ram;
-    }
-}
-
-void setAllPortOutput() {
-    pinMode(PORT_SE_IN, OUTPUT);
-    pinMode(PORT_AB_IN, OUTPUT);
-    pinMode(PORT_A3_IN, OUTPUT);
-    pinMode(PORT_A2_IN, OUTPUT);
-    pinMode(PORT_A1_IN, OUTPUT);
-    pinMode(PORT_A0_IN, OUTPUT);
-    pinMode(PORT_DG_IN, OUTPUT);
-    pinMode(PORT_CLK_IN, OUTPUT);
-    pinMode(PORT_WE_IN, OUTPUT);
-    pinMode(PORT_DR_IN, OUTPUT);
-    pinMode(PORT_ALE_IN, OUTPUT);
-    pinMode(PORT_LAMP, OUTPUT);
-}
-
-void setAllPortLow() {
-    //digitalWrite(PORT_SE_IN, LOW);
-    digitalWrite(PORT_AB_IN, LOW);
-    digitalWrite(PORT_A3_IN, LOW);
-    digitalWrite(PORT_A2_IN, LOW);
-    digitalWrite(PORT_A1_IN, LOW);
-    digitalWrite(PORT_A0_IN, LOW);
-    digitalWrite(PORT_DG_IN, LOW);
-    digitalWrite(PORT_CLK_IN, LOW);
-    digitalWrite(PORT_WE_IN, LOW);
-    digitalWrite(PORT_DR_IN, LOW);
-    digitalWrite(PORT_ALE_IN, LOW);
-    digitalWrite(PORT_LAMP, LOW);
 }
 
 void PrintTime(String &str, int flag) {
@@ -454,37 +240,6 @@ void check_clock() {
     }
 }
 
-String getSensorInfo(String hostName, String uri) {
-    String jsonBody;
-    HTTPClient http;
-
-    long oldTime = millis();
-    log_i("START getSensorInfo():%dms", millis() - oldTime);
-    log_i("Starting connection to %s.local Web server...", hostName.c_str());
-
-    IPAddress ip = MDNS.queryHost(hostName);
-    log_i("[%d]Hostname : %s IPaddress : %s", millis() - oldTime, hostName.c_str(), ip.toString().c_str());
-
-    http.begin(ip.toString(), 80, uri);
-    int httpCode = http.GET();
-
-    if (httpCode < 0) {
-        log_e("Connection failed! code : %d", httpCode);
-        jsonBody = "";
-    } else {
-        log_i("Connected to server! code : %d", httpCode);
-        jsonBody = http.getString();
-    }
-
-    if (http.connected()) {
-        http.end();
-    }
-
-    log_i("END getSensorInfo():%dms", millis() - oldTime);
-
-    return jsonBody;
-}
-
 bool WaitSeconds(int second) {
     time_t t      = time(NULL);
     struct tm *tm = localtime(&t);
@@ -542,31 +297,6 @@ void printHumidity() {
     log_i("humidity : [%s]", String(buffer).c_str());
 
     printStatic(String(buffer));
-}
-
-void getBME280Info() {
-    String json = getSensorInfo(DIST_HOSTNAME, APIURI);
-    if (json == "") {
-        if (retry < 2) {
-            retry++;
-            checkSensor();
-            delay(3000);
-            return;
-        } else {
-            retry = 0;
-            return;
-        }
-    } else {
-        retry = 0;
-
-        log_d("Body = %s", json.c_str());
-        deserializeJson(doc, json);
-
-        ESPUI.updateControlValue(timeLabelId, makeCreateTime());
-        ESPUI.updateControlValue(temperatureLabelId, String((float)doc["temperatur"]) + String(" °C"));
-        ESPUI.updateControlValue(humidityLabelId, String((float)doc["humidity"]) + String(" %"));
-        ESPUI.updateControlValue(pressurLabelId, String((float)doc["pressur"]) + String(" hPa"));
-    }
 }
 
 void selectHour(Control *sender, int value) {
@@ -660,8 +390,6 @@ String makeJsonResponse(String selfApiURI, String nextApiURI, String status) {
 }
 
 void initWebServer() {
-    //g_server = stb.getAsyncWebServerPtr();
-
     if (g_server != nullptr) {
         makeJsonResponse("", "", "");
 
@@ -696,11 +424,6 @@ void setup() {
 
     connectBlinker.attach_ms(500, connecting);
 
-    stb.setHostname(HOSTNAME);
-    stb.setTargetHostname(DIST_HOSTNAME);
-    stb.setApName(AP_NAME);
-    stb.begin(false, false);
-
     initClock();
     initESPUI();
 
@@ -711,85 +434,82 @@ void setup() {
 }
 
 void loop() {
-    if (stb.handle() == false) {
-        switch (message) {
-            case MESSAGE::MSG_COMMAND_GET_SENSOR_DATA:
+    switch (message) {
+        case MESSAGE::MSG_COMMAND_GET_SENSOR_DATA:
 
-                getBME280Info();
-                message = MESSAGE::MSG_COMMAND_NOTHING;
-                break;
-            case MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE:
+            message = MESSAGE::MSG_COMMAND_NOTHING;
+            break;
+        case MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE:
 
-                printTemperature();
-                delay(3000);
-                message = MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE;
-                break;
-            case MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE:
+            printTemperature();
+            delay(3000);
+            message = MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE;
+            break;
+        case MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE:
 
-                printHumidity();
-                delay(3000);
-                message = MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE;
-                break;
-            case MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE:
+            printHumidity();
+            delay(3000);
+            message = MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE;
+            break;
+        case MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE:
 
-                printPressure();
-                delay(3000);
-                message = MESSAGE::MSG_COMMAND_START_CLOCK;
-                break;
-            case MESSAGE::MSG_COMMAND_START_CLOCK:
-                digitalWrite(PORT_LAMP, HIGH);
-                startClock();
-                message = MESSAGE::MSG_COMMAND_NOTHING;
-                break;
-            case MESSAGE::MSG_COMMAND_STOP_CLOCK:
+            printPressure();
+            delay(3000);
+            message = MESSAGE::MSG_COMMAND_START_CLOCK;
+            break;
+        case MESSAGE::MSG_COMMAND_START_CLOCK:
+            digitalWrite(PORT_LAMP, HIGH);
+            startClock();
+            message = MESSAGE::MSG_COMMAND_NOTHING;
+            break;
+        case MESSAGE::MSG_COMMAND_STOP_CLOCK:
 
-                stopClock();
-                message = MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE;
-                break;
+            stopClock();
+            message = MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE;
+            break;
 #ifdef ESP32_BLE
-            case MESSAGE::MSG_COMMAND_BLE_INIT:
-                initBLE();
-                break;
-            case MESSAGE::MSG_COMMAND_BLE_DO_CONNECT:
-                log_i("We wish to connect BLE Server. pServerAddress = 0x%x", pServerAddress);
-                // We have scanned for and found the desired BLE Server with which we wish to connect.
-                // Now we connect to it. Once we are connected we set "MSG_COMMAND_BLE_CONNECTED"
-                if (connectToServer(*pServerAddress)) {
-                    log_i("We are now connected to the BLE Server");
-                    message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
-                } else {
-                    log_i("We have failed to connect to the server; there is nothing more we will do.");
-                    message = MESSAGE::MSG_COMMAND_BLE_DISCONNECTED;
-                }
-                break;
-            case MESSAGE::MSG_COMMAND_BLE_CONNECTED:
-                log_i("We are connected to a peer BLE Server");
-                // If we are connected to a peer BLE Server, update the characteristic each time we are reached
-                // with the current time since boot.
+        case MESSAGE::MSG_COMMAND_BLE_INIT:
+            initBLE();
+            break;
+        case MESSAGE::MSG_COMMAND_BLE_DO_CONNECT:
+            log_i("We wish to connect BLE Server. pServerAddress = 0x%x", pServerAddress);
+            // We have scanned for and found the desired BLE Server with which we wish to connect.
+            // Now we connect to it. Once we are connected we set "MSG_COMMAND_BLE_CONNECTED"
+            if (connectToServer(*pServerAddress)) {
+                log_i("We are now connected to the BLE Server");
+                message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
+            } else {
+                log_i("We have failed to connect to the server; there is nothing more we will do.");
+                message = MESSAGE::MSG_COMMAND_BLE_DISCONNECTED;
+            }
+            break;
+        case MESSAGE::MSG_COMMAND_BLE_CONNECTED:
+            log_i("We are connected to a peer BLE Server");
+            // If we are connected to a peer BLE Server, update the characteristic each time we are reached
+            // with the current time since boot.
 
-                //String newValue = "Time since boot: " + String(millis() / 1000);
-                //log_i("Setting new characteristic value to \"%s\"", newValue.c_str());
+            //String newValue = "Time since boot: " + String(millis() / 1000);
+            //log_i("Setting new characteristic value to \"%s\"", newValue.c_str());
 
-                // Set the characteristic's value to be the array of bytes that is actually a string.
-                //pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
-                message = MESSAGE::MSG_COMMAND_NOTHING;
-                break;
-            case MESSAGE::MSG_COMMAND_BLE_DISCONNECTED:
-                log_i("Disconnected our service");
+            // Set the characteristic's value to be the array of bytes that is actually a string.
+            //pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
+            message = MESSAGE::MSG_COMMAND_NOTHING;
+            break;
+        case MESSAGE::MSG_COMMAND_BLE_DISCONNECTED:
+            log_i("Disconnected our service");
 
-                //TODO LED ON or OFF? To indicate for human.
-                message = MESSAGE::MSG_COMMAND_BLE_INIT;
-                break;
-            case MESSAGE::MSG_COMMAND_BLE_NOT_FOUND:
-                log_i("Not found our service");
+            //TODO LED ON or OFF? To indicate for human.
+            message = MESSAGE::MSG_COMMAND_BLE_INIT;
+            break;
+        case MESSAGE::MSG_COMMAND_BLE_NOT_FOUND:
+            log_i("Not found our service");
 
-                //TODO LED ON or OFF? To indicate for human.
-                message = MESSAGE::MSG_COMMAND_NOTHING;
-                break;
+            //TODO LED ON or OFF? To indicate for human.
+            message = MESSAGE::MSG_COMMAND_NOTHING;
+            break;
 #endif
-            case MESSAGE::MSG_COMMAND_NOTHING:
-            default:;  //nothing
-        }
+        case MESSAGE::MSG_COMMAND_NOTHING:
+        default:;  //nothing
     }
 
     yield();
