@@ -25,16 +25,19 @@ SOFTWARE.
 
 #define TS_ENABLE_SSL  // Don't forget it for ThingSpeak.h!!
 #include <Arduino.h>
-#include <AutoConnect.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_I2CDevice.h>
+#include <HD_0158_RG0019A.h>
 #include <ESP32_SPIFFS_ShinonomeFNT.h>
 #include <ESP32_SPIFFS_UTF8toSJIS.h>
+#include <AutoConnect.h>
+#include <timezone.h>
 #include <ESPUI.h>
 #include <ThingSpeak.h>
 #include <Ticker.h>
 #include <esp32-hal-log.h>
-#include <ledmatrix.h>
 #include <secrets.h>
-#include <timezone.h>
 
 #define HOSTNAME      "esp32_clock"
 #define MSG_CONNECTED "        WiFi Started."
@@ -45,12 +48,6 @@ SOFTWARE.
 const String UTF8SJIS_FILE("/Utf8Sjis.tbl");
 const String SHINO_HALF_FONT_FILE("/shnm8x16.bdf");  //半角フォントファイル名
 const String DUMMY("");
-const String APIURI("/esp/sensor/all");
-
-const String sensors_all("/api/v1/devices/sensors/1/all");
-const String sensors_temperature("/api/v1/devices/sensors/1/temperature");
-const String sensors_humidity("/api/v1/devices/sensors/1/humidity");
-const String sensors_pressure("/api/v1/devices/sensors/1/pressure");
 
 Ticker clocker;
 Ticker connectBlinker;
@@ -61,7 +58,25 @@ StaticJsonDocument<384> doc;
 
 ESP32_SPIFFS_ShinonomeFNT SFR;
 
-AsyncWebServer *g_server;
+// HD_0158_RG0019A library doesn't use manual RAM control.
+// Set SE and ABB low.
+#define PANEL_PIN_A3  23
+#define PANEL_PIN_A2  21
+#define PANEL_PIN_A1  25
+#define PANEL_PIN_A0  26
+#define PANEL_PIN_DG  19
+#define PANEL_PIN_CLK 18
+#define PANEL_PIN_WE  17
+#define PANEL_PIN_DR  16
+#define PANEL_PIN_ALE 22
+#define PORT_SE_IN    13
+#define PORT_AB_IN    27
+#define PORT_LAMP     5
+
+HD_0158_RG0019A matrix(
+    2,
+    PANEL_PIN_A3, PANEL_PIN_A2, PANEL_PIN_A1, PANEL_PIN_A0,
+    PANEL_PIN_DG, PANEL_PIN_CLK, PANEL_PIN_WE, PANEL_PIN_DR, PANEL_PIN_ALE);
 
 uint16_t timeLabelId;
 uint16_t temperatureLabelId;
@@ -85,6 +100,18 @@ enum class MESSAGE {
 };
 
 MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
+
+void setAllPortOutput() {
+    pinMode(PORT_SE_IN, OUTPUT);
+    pinMode(PORT_AB_IN, OUTPUT);
+    pinMode(PORT_LAMP, OUTPUT);
+}
+
+void setAllPortLow() {
+    digitalWrite(PORT_SE_IN, LOW);
+    digitalWrite(PORT_AB_IN, LOW);
+    digitalWrite(PORT_LAMP, LOW);
+}
 
 String makeCreateTime() {
     time_t t      = time(NULL);
@@ -119,56 +146,56 @@ void PrintTime(String &str, int flag) {
 }
 
 void printTimeLEDMatrix() {
-    static int flag = 0;
-    String str;
-    uint8_t time_font_buf[8][16] = {0};
-    uint8_t time_font_color[8]   = {G, G, O, G, G, O, G, G};
+    // static int flag = 0;
+    // String str;
+    // uint8_t time_font_buf[8][16] = {0};
+    // uint8_t time_font_color[8]   = {G, G, O, G, G, O, G, G};
 
-    flag = ~flag;
-    PrintTime(str, flag);
+    // flag = ~flag;
+    // PrintTime(str, flag);
 
-    uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, time_font_buf);
-    printLEDMatrix(sj_length, time_font_buf, time_font_color);
+    // uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, time_font_buf);
+    // printLEDMatrix(sj_length, time_font_buf, time_font_color);
 }
 
 void blink() {
-    printTimeLEDMatrix();
+    //    printTimeLEDMatrix();
 }
 
 void connecting() {
-    uint16_t sj_length       = 0;
-    uint8_t _font_buf[8][16] = {0};
-    uint8_t _font_color[8]   = {G, G, G, G, G, G, G, O};
+    // uint16_t sj_length       = 0;
+    // uint8_t _font_buf[8][16] = {0};
+    // uint8_t _font_color[8]   = {G, G, G, G, G, G, G, O};
 
-    static int num = 0;
+    // static int num = 0;
 
-    num = ~num;
+    // num = ~num;
 
-    if (num) {
-        sj_length = SFR.StrDirect_ShinoFNT_readALL("init   .", _font_buf);
-        printLEDMatrix(sj_length, _font_buf, _font_color);
-    } else {
-        sj_length = SFR.StrDirect_ShinoFNT_readALL("init    ", _font_buf);
-        printLEDMatrix(sj_length, _font_buf, _font_color);
-    }
+    // if (num) {
+    //     sj_length = SFR.StrDirect_ShinoFNT_readALL("init   .", _font_buf);
+    //     printLEDMatrix(sj_length, _font_buf, _font_color);
+    // } else {
+    //     sj_length = SFR.StrDirect_ShinoFNT_readALL("init    ", _font_buf);
+    //     printLEDMatrix(sj_length, _font_buf, _font_color);
+    // }
 }
 
 void printConnected() {
-    uint16_t sj_length       = 0;
-    uint8_t font_buf[32][16] = {0};
-    uint8_t font_color1[32]  = {G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G};
+    // uint16_t sj_length       = 0;
+    // uint8_t font_buf[32][16] = {0};
+    // uint8_t font_color1[32]  = {G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G};
 
-    sj_length = SFR.StrDirect_ShinoFNT_readALL(MSG_CONNECTED, font_buf);
-    scrollLEDMatrix(sj_length, font_buf, font_color1, 30);
+    // sj_length = SFR.StrDirect_ShinoFNT_readALL(MSG_CONNECTED, font_buf);
+    // scrollLEDMatrix(sj_length, font_buf, font_color1, 30);
 
-    sj_length = SFR.StrDirect_ShinoFNT_readALL("        " + WiFi.localIP().toString(), font_buf);
-    scrollLEDMatrix(sj_length, font_buf, font_color1, 30);
+    // sj_length = SFR.StrDirect_ShinoFNT_readALL("        " + WiFi.localIP().toString(), font_buf);
+    // scrollLEDMatrix(sj_length, font_buf, font_color1, 30);
 }
 
 void print_blank() {
-    uint8_t _font_buf[8][16] = {0};
-    uint8_t _font_color[8]   = {G, G, G, G, G, G, G, G};
-    printLEDMatrix(8, _font_buf, _font_color);
+    // uint8_t _font_buf[8][16] = {0};
+    // uint8_t _font_color[8]   = {G, G, G, G, G, G, G, G};
+    // printLEDMatrix(8, _font_buf, _font_color);
 }
 
 void clearLEDMatrix() {
@@ -177,16 +204,16 @@ void clearLEDMatrix() {
 }
 
 void printStatic(String str) {
-    uint8_t _font_buf[8][16] = {0};
-    uint8_t _font_color[8]   = {G, G, G, G, G, G, G, G};
+    // uint8_t _font_buf[8][16] = {0};
+    // uint8_t _font_color[8]   = {G, G, G, G, G, G, G, G};
 
-    if (str.length() < 9) {
-        log_i("str : %s", str.c_str());
-        uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, _font_buf);
-        printLEDMatrix(sj_length, _font_buf, _font_color);
-    } else {
-        log_e("couldn't set string. string length : %d", str.length());
-    }
+    // if (str.length() < 9) {
+    //     log_i("str : %s", str.c_str());
+    //     uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, _font_buf);
+    //     printLEDMatrix(sj_length, _font_buf, _font_color);
+    // } else {
+    //     log_e("couldn't set string. string length : %d", str.length());
+    // }
 }
 
 void initFont() {
@@ -198,8 +225,6 @@ void initLEDMatrix() {
 
     setAllPortOutput();
     setAllPortLow();
-
-    digitalWrite(PORT_SE_IN, HIGH);  //to change manual mode
 
     print_blank();
     print_blank();
@@ -324,99 +349,6 @@ void initESPUI() {
     ESPUI.addControl(ControlType::Option, "50", "50", ControlColor::Alizarin, minuit);
 
     ESPUI.begin("LAMP Alarm Clock Setting");
-}
-
-String getSensorDeviceName() {
-    return "BME280";
-}
-
-const char HEX_CHAR_ARRAY[17] = "0123456789ABCDEF";
-/**
-* convert char array (hex values) to readable string by seperator
-* buf:           buffer to convert
-* length:        data length
-* strSeperator   seperator between each hex value
-* return:        formated value as String
-*/
-String byteToHexString(uint8_t *buf, uint8_t length, String strSeperator = "-") {
-    String dataString = "";
-    for (uint8_t i = 0; i < length; i++) {
-        byte v = buf[i] / 16;
-        byte w = buf[i] % 16;
-        if (i > 0) {
-            dataString += strSeperator;
-        }
-        dataString += String(HEX_CHAR_ARRAY[v]);
-        dataString += String(HEX_CHAR_ARRAY[w]);
-    }
-    dataString.toUpperCase();
-    return dataString;
-}  // byteToHexString
-
-String _getESP32ChipID() {
-    uint64_t chipid;
-    chipid          = ESP.getEfuseMac();  //The chip ID is essentially its MAC address(length: 6 bytes).
-    int chipid_size = 6;
-    uint8_t chipid_arr[chipid_size];
-    for (uint8_t i = 0; i < chipid_size; i++) {
-        chipid_arr[i] = (chipid >> (8 * i)) & 0xff;
-    }
-    return byteToHexString(chipid_arr, chipid_size, ":");
-}
-
-String makeJsonResponse(String selfApiURI, String nextApiURI, String status) {
-    String response;
-
-    StaticJsonDocument<384> _local;
-
-    _local["cip_id"]     = _getESP32ChipID();
-    _local["created_at"] = makeCreateTime();
-
-    JsonObject _links = _local.createNestedObject("_links");
-
-    _links["self"]["href"] = selfApiURI;
-    _links["next"]["href"] = nextApiURI;
-
-    JsonObject _embedded_sensor_1     = _local["_embedded"]["sensor"].createNestedObject("1");
-    _embedded_sensor_1["device_name"] = getSensorDeviceName();
-    _embedded_sensor_1["temperature"] = doc["temperatur"];
-    _embedded_sensor_1["humidity"]    = doc["humidity"];
-    _embedded_sensor_1["pressure"]    = doc["pressur"];
-    _embedded_sensor_1["status"]      = status;
-
-    serializeJson(_local, response);
-
-    return response;
-}
-
-void initWebServer() {
-    if (g_server != nullptr) {
-        makeJsonResponse("", "", "");
-
-        g_server->on(sensors_all.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-            log_d("[HTTP_GET] %s", sensors_all.c_str());
-            String response = makeJsonResponse(sensors_all, sensors_temperature, "online");
-            request->send(200, "application/json; charset=UTF-8", response);
-        });
-
-        g_server->on(sensors_temperature.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-            log_d("[HTTP_GET] %s", sensors_temperature.c_str());
-
-            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-        });
-
-        g_server->on(sensors_humidity.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-            log_d("[HTTP_GET] %s", sensors_humidity.c_str());
-
-            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-        });
-
-        g_server->on(sensors_pressure.c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
-            log_d("[HTTP_GET] %s", sensors_pressure.c_str());
-
-            request->send(200, "application/json; charset=UTF-8", "{\"code\": 200}");
-        });
-    }
 }
 
 void setup() {
