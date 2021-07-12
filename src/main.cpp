@@ -25,29 +25,29 @@ SOFTWARE.
 
 #define TS_ENABLE_SSL  // Don't forget it for ThingSpeak.h!!
 #include <Arduino.h>
+#include <esp32-hal-log.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_I2CDevice.h>
 #include <HD_0158_RG0019A.h>
-#include <ESP32_SPIFFS_ShinonomeFNT.h>
-#include <ESP32_SPIFFS_UTF8toSJIS.h>
 #include <AutoConnect.h>
-#include <timezone.h>
 #include <ESPUI.h>
 #include <ThingSpeak.h>
 #include <Ticker.h>
-#include <esp32-hal-log.h>
+#include <secrets.h>
+#include <WebServer.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <ESPmDNS.h>
+#include <timezone.h>
 #include <secrets.h>
 
 #define HOSTNAME      "esp32_clock"
-#define MSG_CONNECTED "        WiFi Started."
+#define HTTP_PORT     80
+#define MSG_CONNECTED "WiFi Started."
 
 #define CLOCK_EN_S    6   //Start AM 6:00
 #define CLOCK_EN_E    23  //End   PM11:00
-
-const String UTF8SJIS_FILE("/Utf8Sjis.tbl");
-const String SHINO_HALF_FONT_FILE("/shnm8x16.bdf");  //半角フォントファイル名
-const String DUMMY("");
 
 Ticker clocker;
 Ticker connectBlinker;
@@ -55,9 +55,6 @@ Ticker clockChecker;
 Ticker sensorChecker;
 
 StaticJsonDocument<384> doc;
-
-ESP32_SPIFFS_ShinonomeFNT SFR;
-
 // HD_0158_RG0019A library doesn't use manual RAM control.
 // Set SE and ABB low.
 #define PANEL_PIN_A3  23
@@ -82,6 +79,15 @@ uint16_t timeLabelId;
 uint16_t temperatureLabelId;
 uint16_t humidityLabelId;
 uint16_t pressurLabelId;
+
+WebServer Server;
+AutoConnect Portal(Server);
+AutoConnectConfig Config;  // Enable autoReconnect supported on v0.9.4
+AutoConnectAux Timezone;
+
+unsigned long myChannelNumber = SECRET_CH_ID;
+const char *myWriteAPIKey     = SECRET_WRITE_APIKEY;
+const char *certificate       = SECRET_TS_ROOT_CA;
 
 //message ID
 enum class MESSAGE {
@@ -113,6 +119,78 @@ void setAllPortLow() {
     digitalWrite(PORT_LAMP, LOW);
 }
 
+void rootPage(void) {
+    String content =
+        "<html>"
+        "<head>"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<script type=\"text/javascript\">"
+        "setTimeout(\"location.reload()\", 1000);"
+        "</script>"
+        "</head>"
+        "<body>"
+        "<h2 align=\"center\" style=\"color:blue;margin:20px;\">Hello, world</h2>"
+        "<h3 align=\"center\" style=\"color:gray;margin:10px;\">{{DateTime}}</h3>"
+        "<p style=\"text-align:center;\">Reload the page to update the time.</p>"
+        "<p></p><p style=\"padding-top:15px;text-align:center\">" AUTOCONNECT_LINK(COG_24) "</p>"
+                                                                                           "</body>"
+                                                                                           "</html>";
+    static const char *wd[7] = {"Sun", "Mon", "Tue", "Wed", "Thr", "Fri", "Sat"};
+    struct tm *tm;
+    time_t t;
+    char dateTime[26];
+
+    t  = time(NULL);
+    tm = localtime(&t);
+    sprintf(dateTime, "%04d/%02d/%02d(%s) %02d:%02d:%02d.",
+            tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+            wd[tm->tm_wday],
+            tm->tm_hour, tm->tm_min, tm->tm_sec);
+    content.replace("{{DateTime}}", String(dateTime));
+    Server.send(200, "text/html", content);
+}
+
+void startPage(void) {
+    // Retrieve the value of AutoConnectElement with arg function of WebServer class.
+    // Values are accessible with the element name.
+    String tz = Server.arg("timezone");
+
+    for (uint8_t n = 0; n < sizeof(TZ) / sizeof(Timezone_t); n++) {
+        String tzName = String(TZ[n].zone);
+        if (tz.equalsIgnoreCase(tzName)) {
+            configTime(TZ[n].tzoff * 3600, 0, TZ[n].ntpServer);
+            log_d("Time zone: %s", tz.c_str());
+            log_d("ntp server: %s", String(TZ[n].ntpServer).c_str());
+            break;
+        }
+    }
+
+    // The /start page just constitutes timezone,
+    // it redirects to the root page without the content response.
+    Server.sendHeader("Location", String("http://") + Server.client().localIP().toString() + String("/"));
+    Server.send(302, "text/plain", "");
+    Server.client().flush();
+    Server.client().stop();
+}
+
+void otaPage(void) {
+    String content = R"(
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta charset="UTF-8" name="viewport" content="width=device-width, initial-scale=1">
+        </head>
+        <body>
+        Place the root page with the sketch application.&ensp;
+        __AC_LINK__
+        </body>
+        </html>
+    )";
+
+    content.replace("__AC_LINK__", String(AUTOCONNECT_LINK(COG_16)));
+    Server.send(200, "text/html", content);
+}
+
 String makeCreateTime() {
     time_t t      = time(NULL);
     struct tm *tm = localtime(&t);
@@ -131,7 +209,10 @@ String makeCreateTime() {
     return String(buffer);
 }
 
-void PrintTime(String &str, int flag) {
+void printTimeLEDMatrix(void) {
+    static int flag = 0;
+    flag            = ~flag;
+
     char tmp_str[10] = {0};
     time_t t         = time(NULL);
     struct tm *tm    = localtime(&t);
@@ -142,92 +223,51 @@ void PrintTime(String &str, int flag) {
         sprintf(tmp_str, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
     }
 
-    str = tmp_str;
-}
-
-void printTimeLEDMatrix() {
-    // static int flag = 0;
-    // String str;
-    // uint8_t time_font_buf[8][16] = {0};
-    // uint8_t time_font_color[8]   = {G, G, O, G, G, O, G, G};
-
-    // flag = ~flag;
-    // PrintTime(str, flag);
-
-    // uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, time_font_buf);
-    // printLEDMatrix(sj_length, time_font_buf, time_font_color);
-}
-
-void blink() {
-    //    printTimeLEDMatrix();
+    matrix.startWrite();
+    matrix.fillScreen(DOT_BLACK);
+    matrix.setCursor(0, 0);
+    matrix.setTextColor(DOT_GREEN);
+    matrix.println(tmp_str);
+    matrix.endWrite();
 }
 
 void connecting() {
-    // uint16_t sj_length       = 0;
-    // uint8_t _font_buf[8][16] = {0};
-    // uint8_t _font_color[8]   = {G, G, G, G, G, G, G, O};
+    static int num = 0;
 
-    // static int num = 0;
+    num = ~num;
 
-    // num = ~num;
+    matrix.startWrite();
+    matrix.fillScreen(DOT_BLACK);
+    matrix.setCursor(0, 0);
+    matrix.setTextColor(DOT_GREEN);
 
-    // if (num) {
-    //     sj_length = SFR.StrDirect_ShinoFNT_readALL("init   .", _font_buf);
-    //     printLEDMatrix(sj_length, _font_buf, _font_color);
-    // } else {
-    //     sj_length = SFR.StrDirect_ShinoFNT_readALL("init    ", _font_buf);
-    //     printLEDMatrix(sj_length, _font_buf, _font_color);
-    // }
+    if (num) {
+        matrix.print("init");
+        matrix.setTextColor(DOT_ORANGE);
+        matrix.println(".");
+    } else {
+        matrix.println("init");
+    }
+    matrix.endWrite();
 }
 
-void printConnected() {
-    // uint16_t sj_length       = 0;
-    // uint8_t font_buf[32][16] = {0};
-    // uint8_t font_color1[32]  = {G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G};
-
-    // sj_length = SFR.StrDirect_ShinoFNT_readALL(MSG_CONNECTED, font_buf);
-    // scrollLEDMatrix(sj_length, font_buf, font_color1, 30);
-
-    // sj_length = SFR.StrDirect_ShinoFNT_readALL("        " + WiFi.localIP().toString(), font_buf);
-    // scrollLEDMatrix(sj_length, font_buf, font_color1, 30);
-}
-
-void print_blank() {
-    // uint8_t _font_buf[8][16] = {0};
-    // uint8_t _font_color[8]   = {G, G, G, G, G, G, G, G};
-    // printLEDMatrix(8, _font_buf, _font_color);
-}
-
-void clearLEDMatrix() {
-    print_blank();
-    print_blank();
-}
-
-void printStatic(String str) {
-    // uint8_t _font_buf[8][16] = {0};
-    // uint8_t _font_color[8]   = {G, G, G, G, G, G, G, G};
-
-    // if (str.length() < 9) {
-    //     log_i("str : %s", str.c_str());
-    //     uint16_t sj_length = SFR.StrDirect_ShinoFNT_readALL(str, _font_buf);
-    //     printLEDMatrix(sj_length, _font_buf, _font_color);
-    // } else {
-    //     log_e("couldn't set string. string length : %d", str.length());
-    // }
-}
-
-void initFont() {
-    SFR.SPIFFS_Shinonome_Init3F(UTF8SJIS_FILE.c_str(), SHINO_HALF_FONT_FILE.c_str(), DUMMY.c_str());
-}
-
-void initLEDMatrix() {
-    initFont();
-
+void initMatrix(void) {
     setAllPortOutput();
     setAllPortLow();
 
-    print_blank();
-    print_blank();
+    matrix.begin();
+#ifdef DEBUG
+    delay(1000);
+    matrix.fillScreen(DOT_GREEN);
+    delay(1000);
+    matrix.fillScreen(DOT_RED);
+    delay(1000);
+#endif
+    matrix.fillScreen(DOT_BLACK);
+
+    matrix.setTextWrap(false);
+    matrix.setTextSize(1);
+    matrix.setFont(NULL);
 }
 
 bool check_clock_enable(uint8_t start_hour, uint8_t end_hour) {
@@ -252,15 +292,15 @@ void stopClock() {
 }
 
 void startClock() {
-    clocker.attach_ms(500, blink);
+    clocker.attach_ms(250, printTimeLEDMatrix);
 }
 
 void check_clock() {
     if (check_clock_enable(CLOCK_EN_S, CLOCK_EN_E)) {
         message = MESSAGE::MSG_COMMAND_START_CLOCK;
     } else {
-        initLEDMatrix();
         stopClock();
+        matrix.fillScreen(DOT_BLACK);
         digitalWrite(PORT_LAMP, LOW);
     }
 }
@@ -297,33 +337,6 @@ void initClock() {
     //sensorChecker.attach(60, checkSensor);
 }
 
-void printTemperature() {
-    char buffer[10]    = {0};
-    float _temperature = doc["temperatur"];  // 21.93
-    sprintf(buffer, "T:%4.1f*C", _temperature);
-    log_i("temperature : [%s]", String(buffer));
-
-    printStatic(String(buffer));
-}
-
-void printPressure() {
-    char buffer[10] = {0};
-    float _pressure = doc["pressur"];  // 1015.944
-    sprintf(buffer, "P:%6.1f", _pressure);
-    log_i("pressure : [%s]", String(buffer).c_str());
-
-    printStatic(String(buffer));
-}
-
-void printHumidity() {
-    char buffer[10] = {0};
-    float _humidity = doc["humidity"];  // 39.27832
-    sprintf(buffer, "H:%5.1f%%", _humidity);
-    log_i("humidity : [%s]", String(buffer).c_str());
-
-    printStatic(String(buffer));
-}
-
 void selectHour(Control *sender, int value) {
     log_d("Select: ID: %d, Value: %d", sender->id, sender->value);
 }
@@ -351,43 +364,58 @@ void initESPUI() {
     ESPUI.begin("LAMP Alarm Clock Setting");
 }
 
+void initAutoConnect(void) {
+    Serial.begin(115200);
+    // Enable saved past credential by autoReconnect option,
+    // even once it is disconnected.
+    Config.autoReconnect = true;
+    Config.ota           = AC_OTA_BUILTIN;
+    Portal.config(Config);
+
+    // Load aux. page
+    Timezone.load(AUX_TIMEZONE);
+    // Retrieve the select element that holds the time zone code and
+    // register the zone mnemonic in advance.
+    AutoConnectSelect &tz = Timezone["timezone"].as<AutoConnectSelect>();
+    for (uint8_t n = 0; n < sizeof(TZ) / sizeof(Timezone_t); n++) {
+        tz.add(String(TZ[n].zone));
+    }
+
+    Portal.join({Timezone});  // Register aux. page
+
+    // Behavior a root path of ESP8266WebServer.
+    Server.on("/", rootPage);
+    Server.on("/start", startPage);  // Set NTP server trigger handler
+    Server.on("/ota", otaPage);
+
+    // Establish a connection with an autoReconnect option.
+    if (Portal.begin()) {
+        log_i("WiFi connected: %s", WiFi.localIP().toString().c_str());
+        if (MDNS.begin(HOSTNAME)) {
+            MDNS.addService("http", "tcp", HTTP_PORT);
+            log_i("HTTP Server ready! Open http://%s.local/ in your browser\n", HOSTNAME);
+        } else
+            log_e("Error setting up MDNS responder");
+    }
+}
+
 void setup() {
-    initLEDMatrix();
+    initMatrix();
 
     connectBlinker.attach_ms(500, connecting);
 
+    initAutoConnect();
     initClock();
-    initESPUI();
+    //initESPUI();
 
     connectBlinker.detach();
-
-    print_blank();
-    print_blank();
 }
 
 void loop() {
+    Portal.handleClient();
     switch (message) {
         case MESSAGE::MSG_COMMAND_GET_SENSOR_DATA:
-
             message = MESSAGE::MSG_COMMAND_NOTHING;
-            break;
-        case MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE:
-
-            printTemperature();
-            delay(3000);
-            message = MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE;
-            break;
-        case MESSAGE::MSG_COMMAND_PRINT_HUMIDITY_VALUE:
-
-            printHumidity();
-            delay(3000);
-            message = MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE;
-            break;
-        case MESSAGE::MSG_COMMAND_PRINT_PRESSURE_VALUE:
-
-            printPressure();
-            delay(3000);
-            message = MESSAGE::MSG_COMMAND_START_CLOCK;
             break;
         case MESSAGE::MSG_COMMAND_START_CLOCK:
             digitalWrite(PORT_LAMP, HIGH);
@@ -395,51 +423,9 @@ void loop() {
             message = MESSAGE::MSG_COMMAND_NOTHING;
             break;
         case MESSAGE::MSG_COMMAND_STOP_CLOCK:
-
             stopClock();
             message = MESSAGE::MSG_COMMAND_PRINT_TEMPERATURE_VALUE;
             break;
-#ifdef ESP32_BLE
-        case MESSAGE::MSG_COMMAND_BLE_INIT:
-            initBLE();
-            break;
-        case MESSAGE::MSG_COMMAND_BLE_DO_CONNECT:
-            log_i("We wish to connect BLE Server. pServerAddress = 0x%x", pServerAddress);
-            // We have scanned for and found the desired BLE Server with which we wish to connect.
-            // Now we connect to it. Once we are connected we set "MSG_COMMAND_BLE_CONNECTED"
-            if (connectToServer(*pServerAddress)) {
-                log_i("We are now connected to the BLE Server");
-                message = MESSAGE::MSG_COMMAND_BLE_CONNECTED;
-            } else {
-                log_i("We have failed to connect to the server; there is nothing more we will do.");
-                message = MESSAGE::MSG_COMMAND_BLE_DISCONNECTED;
-            }
-            break;
-        case MESSAGE::MSG_COMMAND_BLE_CONNECTED:
-            log_i("We are connected to a peer BLE Server");
-            // If we are connected to a peer BLE Server, update the characteristic each time we are reached
-            // with the current time since boot.
-
-            //String newValue = "Time since boot: " + String(millis() / 1000);
-            //log_i("Setting new characteristic value to \"%s\"", newValue.c_str());
-
-            // Set the characteristic's value to be the array of bytes that is actually a string.
-            //pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
-            message = MESSAGE::MSG_COMMAND_NOTHING;
-            break;
-        case MESSAGE::MSG_COMMAND_BLE_DISCONNECTED:
-            log_i("Disconnected our service");
-
-            //TODO LED ON or OFF? To indicate for human.
-            message = MESSAGE::MSG_COMMAND_BLE_INIT;
-            break;
-        case MESSAGE::MSG_COMMAND_BLE_NOT_FOUND:
-            log_i("Not found our service");
-
-            //TODO LED ON or OFF? To indicate for human.
-            message = MESSAGE::MSG_COMMAND_NOTHING;
-            break;
-#endif
         case MESSAGE::MSG_COMMAND_NOTHING:
         default:;  //nothing
     }

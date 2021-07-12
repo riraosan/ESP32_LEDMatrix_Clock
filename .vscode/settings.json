@@ -36,5 +36,10 @@
       "editor.wordWrap": "off",
       "files.trimTrailingWhitespace": false,
     },
-    "C_Cpp.clang_format_sortIncludes": false
+    "C_Cpp.clang_format_sortIncludes": false,
+    "files.associations": {
+      "sstream": "cpp",
+      "regex": "cpp",
+      "glcdfont.c": "cpp"
+    }
 }
