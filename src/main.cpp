@@ -34,7 +34,6 @@ SOFTWARE.
 #include <ESPUI.h>
 #include <ThingSpeak.h>
 #include <Ticker.h>
-#include <secrets.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
