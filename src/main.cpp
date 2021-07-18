@@ -224,10 +224,9 @@ void printTimeLEDMatrix(void) {
     }
 
     matrix.startWrite();
-    matrix.fillScreen(DOT_BLACK);
-    matrix.setCursor(0, 0);
-    matrix.setTextColor(DOT_GREEN);
-    matrix.println(tmp_str);
+    matrix.setCursor(0, -1);
+    matrix.setTextColor(DOT_GREEN, DOT_BLACK);
+    matrix.printEfont(tmp_str);
     matrix.endWrite();
 }
 
@@ -239,15 +238,16 @@ void connecting() {
     matrix.startWrite();
     matrix.fillScreen(DOT_BLACK);
     matrix.setCursor(0, 0);
-    matrix.setTextColor(DOT_GREEN);
+    matrix.setTextColor(DOT_GREEN, DOT_BLACK);
 
     if (num) {
-        matrix.print("init");
-        matrix.setTextColor(DOT_ORANGE);
-        matrix.println(".");
+        matrix.printEfont("init");
+        matrix.setTextColor(DOT_ORANGE, DOT_BLACK);
+        matrix.printEfont(".");
     } else {
-        matrix.println("init");
+        matrix.printEfont("init");
     }
+
     matrix.endWrite();
 }
 
@@ -266,8 +266,9 @@ void initMatrix(void) {
     matrix.fillScreen(DOT_BLACK);
 
     matrix.setTextWrap(false);
-    matrix.setTextSize(1);
-    matrix.setFont(NULL);
+    matrix.setTextSize(1);  // x1
+    matrix.setCursor(0, 0);
+    matrix.setRotation(0);
 }
 
 bool check_clock_enable(uint8_t start_hour, uint8_t end_hour) {
@@ -333,8 +334,6 @@ void initClock() {
         delay(100);
         yield();
     }
-
-    //sensorChecker.attach(60, checkSensor);
 }
 
 void selectHour(Control *sender, int value) {
