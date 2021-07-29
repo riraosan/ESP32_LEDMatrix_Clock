@@ -26,9 +26,6 @@ SOFTWARE.
 #define TS_ENABLE_SSL  // Don't forget it for ThingSpeak.h!!
 #include <Arduino.h>
 #include <esp32-hal-log.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_I2CDevice.h>
 #include <HD_0158_RG0019A.h>
 #include <AutoConnect.h>
 #include <ESPUI.h>
