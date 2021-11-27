@@ -24,8 +24,10 @@ SOFTWARE.
 */
 
 #define TS_ENABLE_SSL  // Don't forget it for ThingSpeak.h!!
-#include <Arduino.h>
+
 #include <esp32-hal-log.h>
+#define USE_EFONT
+
 #include <HD_0158_RG0019A.h>
 #include <AutoConnect.h>
 #include <ESPUI.h>
