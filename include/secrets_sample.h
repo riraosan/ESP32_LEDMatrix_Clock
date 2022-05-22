@@ -5,7 +5,7 @@
 #define NTP_SERVER2 "ntp.jst.mfeed.ad.jp"
 #define NTP_SERVER3 "asia.pool.ntp.org"
 
-#define PHONE
+#define HOME
 
 #if defined(HOME)
 #define SECRET_SSID "your_ssid"

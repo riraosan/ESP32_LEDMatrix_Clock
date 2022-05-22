@@ -25,24 +25,24 @@ SOFTWARE.
 
 #define USE_EFONT
 #include <Arduino.h>
-#include <HD_0158_RG0019A.h>
-#include <AutoConnect.h>
-#include <Ticker.h>
-#include <WebServer.h>
 #include <WiFi.h>
+#include <WebServer.h>
 #include <WiFiClientSecure.h>
+#include <Ticker.h>
 #include <ESPmDNS.h>
-#include <timezone.h>
-#include <secrets.h>
 #include <esp32-hal-log.h>
 
-#define HOSTNAME      "esp32_clock"
-#define HTTP_PORT     80
-#define MSG_CONNECTED "WiFi Started."
+#include <secrets.h>
+#include <timezone.h>
+#include <AutoConnect.h>
+#include <HD_0158_RG0019A.h>
+#include <ESPPerfectTime.h>
 
-#define CLOCK_EN_S    6   // Start AM 6:00
-#define CLOCK_EN_E    21  // End   PM 9:00
-#define CLOCK_RESET   1   // Reset AM 1:00
+#define HOSTNAME   "esp32_clock"
+#define HTTP_PORT  80
+
+#define CLOCK_EN_S 6   // Start AM 6:00
+#define CLOCK_EN_E 21  // End   PM 9:00
 
 Ticker clocker;
 Ticker connectBlinker;
@@ -125,8 +125,8 @@ void rootPage(void) {
   time_t t;
   char dateTime[26];
 
-  t  = time(NULL);
-  tm = localtime(&t);
+  t  = pftime::time(NULL);
+  tm = pftime::localtime(&t);
   sprintf(dateTime, "%04d/%02d/%02d(%s) %02d:%02d:%02d.",
           tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
           wd[tm->tm_wday],
@@ -178,15 +178,16 @@ void otaPage(void) {
 
 void printTimeLEDMatrix(void) {
   char tmp_str[10] = {0};
-  time_t t         = time(NULL);
-  struct tm *tm    = localtime(&t);
+  time_t t         = pftime::time(NULL);
+  struct tm *tm    = pftime::localtime(&t);
 
   sprintf(tmp_str, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
 
   matrix.startWrite();
-  matrix.setCursor(0, -1);
+  matrix.setCursor(1, -1);
   matrix.setTextColor(DOT_GREEN, DOT_BLACK);
   matrix.printEfont(tmp_str);
+  matrix.drawLine(0, 0, 0, 15, DOT_GREEN);
   matrix.drawLine(0, 15, 63, 15, DOT_GREEN);
   matrix.endWrite();
 }
@@ -232,8 +233,8 @@ void initMatrix(void) {
 }
 
 bool check_clock_enable(uint8_t start_hour, uint8_t end_hour) {
-  time_t t      = time(NULL);
-  struct tm *tm = localtime(&t);
+  time_t t      = pftime::time(NULL);
+  struct tm *tm = pftime::localtime(&t);
 
   log_i("HH:MM:SS = %02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
 
@@ -264,7 +265,7 @@ void check_clock(void) {
 
 void initClock(void) {
   // Get NTP Time
-  configTzTime("JST-9", "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
+  pftime::configTzTime(PSTR("JST-9"), "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
   delay(2000);
 
   check_clock();
