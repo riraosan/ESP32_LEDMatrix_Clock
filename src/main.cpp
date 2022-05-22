@@ -24,7 +24,7 @@ SOFTWARE.
 */
 
 #define USE_EFONT
-#include <esp32-hal-log.h>
+#include <Arduino.h>
 #include <HD_0158_RG0019A.h>
 #include <AutoConnect.h>
 #include <Ticker.h>
@@ -34,20 +34,21 @@ SOFTWARE.
 #include <ESPmDNS.h>
 #include <timezone.h>
 #include <secrets.h>
+#include <esp32-hal-log.h>
 
 #define HOSTNAME      "esp32_clock"
 #define HTTP_PORT     80
 #define MSG_CONNECTED "WiFi Started."
 
 #define CLOCK_EN_S    6   // Start AM 6:00
-#define CLOCK_EN_E    22  // End   PM10:00
+#define CLOCK_EN_E    21  // End   PM 9:00
+#define CLOCK_RESET   1   // Reset AM 1:00
 
 Ticker clocker;
 Ticker connectBlinker;
 Ticker clockChecker;
 Ticker sensorChecker;
 
-StaticJsonDocument<384> doc;
 // HD_0158_RG0019A library doesn't use manual RAM control.
 // Set SE and ABB low.
 #define PANEL_PIN_A3  23
@@ -68,19 +69,10 @@ HD_0158_RG0019A matrix(
     PANEL_PIN_A3, PANEL_PIN_A2, PANEL_PIN_A1, PANEL_PIN_A0,
     PANEL_PIN_DG, PANEL_PIN_CLK, PANEL_PIN_WE, PANEL_PIN_DR, PANEL_PIN_ALE);
 
-uint16_t timeLabelId;
-uint16_t temperatureLabelId;
-uint16_t humidityLabelId;
-uint16_t pressurLabelId;
-
 WebServer Server;
 AutoConnect Portal(Server);
 AutoConnectConfig Config;  // Enable autoReconnect supported on v0.9.4
 AutoConnectAux Timezone;
-
-unsigned long myChannelNumber = SECRET_CH_ID;
-const char *myWriteAPIKey     = SECRET_WRITE_APIKEY;
-const char *certificate       = SECRET_TS_ROOT_CA;
 
 // message ID
 enum class MESSAGE {
@@ -100,13 +92,13 @@ enum class MESSAGE {
 
 MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
 
-void setAllPortOutput() {
+void setAllPortOutput(void) {
   pinMode(PORT_SE_IN, OUTPUT);
   pinMode(PORT_AB_IN, OUTPUT);
   pinMode(PORT_LAMP, OUTPUT);
 }
 
-void setAllPortLow() {
+void setAllPortLow(void) {
   digitalWrite(PORT_SE_IN, LOW);
   digitalWrite(PORT_AB_IN, LOW);
   digitalWrite(PORT_LAMP, LOW);
@@ -184,46 +176,22 @@ void otaPage(void) {
   Server.send(200, "text/html", content);
 }
 
-String makeCreateTime() {
-  time_t t      = time(NULL);
-  struct tm *tm = localtime(&t);
-
-  char buffer[128] = {0};
-  sprintf(buffer, "%04d-%02d-%02dT%02d:%02d:%02d+0900",
-          tm->tm_year + 1900,
-          tm->tm_mon + 1,
-          tm->tm_mday,
-          tm->tm_hour,
-          tm->tm_min,
-          tm->tm_sec);
-
-  log_i("[time] %s", String(buffer).c_str());
-
-  return String(buffer);
-}
-
 void printTimeLEDMatrix(void) {
-  static int flag = 0;
-  flag            = ~flag;
-
   char tmp_str[10] = {0};
   time_t t         = time(NULL);
   struct tm *tm    = localtime(&t);
 
-  if (flag == 0) {
-    sprintf(tmp_str, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
-  } else {
-    sprintf(tmp_str, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
-  }
+  sprintf(tmp_str, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
 
   matrix.startWrite();
   matrix.setCursor(0, -1);
   matrix.setTextColor(DOT_GREEN, DOT_BLACK);
   matrix.printEfont(tmp_str);
+  matrix.drawLine(0, 15, 63, 15, DOT_GREEN);
   matrix.endWrite();
 }
 
-void connecting() {
+void connecting(void) {
   static int num = 0;
 
   num = ~num;
@@ -249,13 +217,12 @@ void initMatrix(void) {
   setAllPortLow();
 
   matrix.begin();
-#ifdef DEBUG
+
   delay(1000);
   matrix.fillScreen(DOT_GREEN);
   delay(1000);
   matrix.fillScreen(DOT_RED);
   delay(1000);
-#endif
   matrix.fillScreen(DOT_BLACK);
 
   matrix.setTextWrap(false);
@@ -277,19 +244,15 @@ bool check_clock_enable(uint8_t start_hour, uint8_t end_hour) {
   }
 }
 
-void checkSensor() {
-  message = MESSAGE::MSG_COMMAND_GET_SENSOR_DATA;
-}
-
-void stopClock() {
+void stopClock(void) {
   clocker.detach();
 }
 
-void startClock() {
+void startClock(void) {
   clocker.attach_ms(250, printTimeLEDMatrix);
 }
 
-void check_clock() {
+void check_clock(void) {
   if (check_clock_enable(CLOCK_EN_S, CLOCK_EN_E)) {
     message = MESSAGE::MSG_COMMAND_START_CLOCK;
   } else {
@@ -299,34 +262,13 @@ void check_clock() {
   }
 }
 
-bool WaitSeconds(int second) {
-  time_t t      = time(NULL);
-  struct tm *tm = localtime(&t);
-
-  if (tm->tm_sec == second) {
-    return false;
-  }
-
-  return true;
-}
-
-void initClock() {
+void initClock(void) {
   // Get NTP Time
   configTzTime("JST-9", "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
   delay(2000);
 
-  while (WaitSeconds(0)) {
-    delay(100);
-    yield();
-  }
-
   check_clock();
   clockChecker.attach(60, check_clock);
-
-  while (WaitSeconds(30)) {
-    delay(100);
-    yield();
-  }
 }
 
 void initAutoConnect(void) {
@@ -354,7 +296,7 @@ void initAutoConnect(void) {
   Server.on("/ota", otaPage);
 
   // Establish a connection with an autoReconnect option.
-  if (Portal.begin()) {
+  if (Portal.begin(SECRET_SSID, SECRET_PASS)) {
     log_i("WiFi connected: %s", WiFi.localIP().toString().c_str());
     if (MDNS.begin(HOSTNAME)) {
       MDNS.addService("http", "tcp", HTTP_PORT);
@@ -364,7 +306,7 @@ void initAutoConnect(void) {
   }
 }
 
-void setup() {
+void setup(void) {
   initMatrix();
 
   connectBlinker.attach_ms(500, connecting);
@@ -375,7 +317,7 @@ void setup() {
   connectBlinker.detach();
 }
 
-void loop() {
+void loop(void) {
   Portal.handleClient();
   switch (message) {
     case MESSAGE::MSG_COMMAND_GET_SENSOR_DATA:
