@@ -1,7 +1,7 @@
 /*
 The MIT License (MIT)
 
-Copyright (c) 2020-2021 riraosan.github.io
+Copyright (c) 2020-2022 riraosan.github.io
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -48,6 +48,7 @@ Ticker clocker;
 Ticker connectBlinker;
 Ticker clockChecker;
 Ticker sensorChecker;
+Ticker resetTimer;
 
 // HD_0158_RG0019A library doesn't use manual RAM control.
 // Set SE and ABB low.
@@ -188,6 +189,7 @@ void printTimeLEDMatrix(void) {
   matrix.setTextColor(DOT_GREEN, DOT_BLACK);
   matrix.printEfont(tmp_str);
   matrix.drawLine(0, 0, 0, 15, DOT_GREEN);
+  matrix.drawLine(1, 0, 1, 15, DOT_GREEN);
   matrix.drawLine(0, 15, 63, 15, DOT_GREEN);
   matrix.endWrite();
 }
@@ -253,6 +255,11 @@ void startClock(void) {
   clocker.attach_ms(250, printTimeLEDMatrix);
 }
 
+void resetClock(void) {
+  // to adjust NTP time
+  ESP.restart();
+}
+
 void check_clock(void) {
   if (check_clock_enable(CLOCK_EN_S, CLOCK_EN_E)) {
     message = MESSAGE::MSG_COMMAND_START_CLOCK;
@@ -316,6 +323,8 @@ void setup(void) {
   initClock();
 
   connectBlinker.detach();
+
+  resetTimer.attach(60 * 60 * 6, resetClock);
 }
 
 void loop(void) {
