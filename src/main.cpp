@@ -23,7 +23,6 @@ SOFTWARE.
 
 */
 
-#define USE_EFONT
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -35,8 +34,11 @@ SOFTWARE.
 #include <secrets.h>
 #include <timezone.h>
 #include <AutoConnect.h>
-#include <HD_0158_RG0019A.h>
 #include <ESPPerfectTime.h>
+#include <ESP32_HD0158_LGFX.h>
+
+using namespace lgfx;
+using namespace lgfx::v1::fonts;
 
 #define HOSTNAME   "esp32_clock"
 #define HTTP_PORT  80
@@ -50,25 +52,9 @@ Ticker clockChecker;
 Ticker sensorChecker;
 Ticker resetTimer;
 
-// HD_0158_RG0019A library doesn't use manual RAM control.
-// Set SE and ABB low.
-#define PANEL_PIN_A3  23
-#define PANEL_PIN_A2  21
-#define PANEL_PIN_A1  25
-#define PANEL_PIN_A0  26
-#define PANEL_PIN_DG  19
-#define PANEL_PIN_CLK 18
-#define PANEL_PIN_WE  17
-#define PANEL_PIN_DR  16
-#define PANEL_PIN_ALE 22
-#define PORT_SE_IN    13
-#define PORT_AB_IN    27
-#define PORT_LAMP     5
+#define PORT_LAMP 5
 
-HD_0158_RG0019A matrix(
-    2,
-    PANEL_PIN_A3, PANEL_PIN_A2, PANEL_PIN_A1, PANEL_PIN_A0,
-    PANEL_PIN_DG, PANEL_PIN_CLK, PANEL_PIN_WE, PANEL_PIN_DR, PANEL_PIN_ALE);
+ESP32_HD0158_LGFX matrix;
 
 WebServer Server;
 AutoConnect Portal(Server);
@@ -94,14 +80,10 @@ enum class MESSAGE {
 MESSAGE message = MESSAGE::MSG_COMMAND_NOTHING;
 
 void setAllPortOutput(void) {
-  pinMode(PORT_SE_IN, OUTPUT);
-  pinMode(PORT_AB_IN, OUTPUT);
   pinMode(PORT_LAMP, OUTPUT);
 }
 
 void setAllPortLow(void) {
-  digitalWrite(PORT_SE_IN, LOW);
-  digitalWrite(PORT_AB_IN, LOW);
   digitalWrite(PORT_LAMP, LOW);
 }
 
@@ -187,7 +169,7 @@ void printTimeLEDMatrix(void) {
   matrix.startWrite();
   matrix.setCursor(1, -1);
   matrix.setTextColor(DOT_GREEN, DOT_BLACK);
-  matrix.printEfont(tmp_str);
+  matrix.print(tmp_str);
   matrix.drawLine(0, 0, 0, 15, DOT_GREEN);
   matrix.drawLine(1, 0, 1, 15, DOT_GREEN);
   matrix.drawLine(0, 15, 63, 15, DOT_GREEN);
@@ -205,11 +187,11 @@ void connecting(void) {
   matrix.setTextColor(DOT_GREEN, DOT_BLACK);
 
   if (num) {
-    matrix.printEfont("init");
+    matrix.print("init");
     matrix.setTextColor(DOT_ORANGE, DOT_BLACK);
-    matrix.printEfont(".");
+    matrix.print(".");
   } else {
-    matrix.printEfont("init");
+    matrix.print("init");
   }
 
   matrix.endWrite();
@@ -221,13 +203,14 @@ void initMatrix(void) {
 
   matrix.begin();
 
-  delay(1000);
+  ::delay(1000);
   matrix.fillScreen(DOT_GREEN);
-  delay(1000);
+  ::delay(1000);
   matrix.fillScreen(DOT_RED);
-  delay(1000);
+  ::delay(1000);
   matrix.fillScreen(DOT_BLACK);
 
+  matrix.setFont(&efontJA_16);
   matrix.setTextWrap(false);
   matrix.setTextSize(1);  // x1
   matrix.setCursor(0, 0);
@@ -273,7 +256,7 @@ void check_clock(void) {
 void initClock(void) {
   // Get NTP Time
   pftime::configTzTime(PSTR("JST-9"), "ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
-  delay(2000);
+  ::delay(2000);
 
   check_clock();
   clockChecker.attach(60, check_clock);
@@ -324,7 +307,7 @@ void setup(void) {
 
   connectBlinker.detach();
 
-  resetTimer.attach(60 * 60 * 6, resetClock);
+  resetTimer.attach(60 * 60 * 12, resetClock);
 }
 
 void loop(void) {
@@ -346,5 +329,5 @@ void loop(void) {
     default:;  // nothing
   }
 
-  delay(1);
+  ::delay(1);
 }
