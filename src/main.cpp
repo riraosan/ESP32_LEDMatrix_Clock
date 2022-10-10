@@ -49,7 +49,6 @@ using namespace lgfx::v1::fonts;
 Ticker clocker;
 Ticker connectBlinker;
 Ticker clockChecker;
-Ticker sensorChecker;
 Ticker resetTimer;
 
 #define PORT_LAMP 5
@@ -60,6 +59,9 @@ WebServer Server;
 AutoConnect Portal(Server);
 AutoConnectConfig Config;  // Enable autoReconnect supported on v0.9.4
 AutoConnectAux Timezone;
+
+bool isEnableClock = false;
+int oldSeconds     = 0;
 
 // message ID
 enum class MESSAGE {
@@ -231,11 +233,13 @@ bool check_clock_enable(uint8_t start_hour, uint8_t end_hour) {
 }
 
 void stopClock(void) {
-  clocker.detach();
+  isEnableClock = false;
+  // clocker.detach();
 }
 
 void startClock(void) {
-  clocker.attach_ms(250, printTimeLEDMatrix);
+  isEnableClock = true;
+  // clocker.attach_ms(250, printTimeLEDMatrix);
 }
 
 void resetClock(void) {
@@ -327,6 +331,22 @@ void loop(void) {
       break;
     case MESSAGE::MSG_COMMAND_NOTHING:
     default:;  // nothing
+  }
+
+  char tmp_str[10] = {0};
+  time_t t         = pftime::time(NULL);
+  struct tm *tm    = pftime::localtime(&t);
+  if (tm->tm_sec != oldSeconds && isEnableClock) {
+    sprintf(tmp_str, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
+    oldSeconds = tm->tm_sec;
+    matrix.startWrite();
+    matrix.setCursor(1, -1);
+    matrix.setTextColor(DOT_GREEN, DOT_BLACK);
+    matrix.print(tmp_str);
+    matrix.drawLine(0, 0, 0, 15, DOT_GREEN);
+    matrix.drawLine(1, 0, 1, 15, DOT_GREEN);
+    matrix.drawLine(0, 15, 63, 15, DOT_GREEN);
+    matrix.endWrite();
   }
 
   ::delay(1);
